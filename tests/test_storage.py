@@ -33,7 +33,7 @@ def test_end_to_end_storage_dry_run_flow(store: Store, fixture_path) -> None:
     assert planned_posts[0].payload["pinterest"]["board_id"] == "demo-board"
     assert planned_posts[0].payload["pinterest"]["media_source"]["source_type"] == "image_url"
     assert planned_posts[0].payload["pinterest"]["media_source"]["url"] == products[0].photos[0]
-    assert planned_posts[0].payload["generated_content"]["cta"].endswith("Wildberries")
+    assert planned_posts[0].payload["generated_content"]["cta"].endswith("Вайлдберриз")
 
     for post in planned_posts:
         store.mark_post_publishing(post.id)

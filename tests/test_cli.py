@@ -889,6 +889,117 @@ def test_wb_vk_cycle_dry_run_plans_and_publishes_new_products(tmp_path: Path, mo
     assert len(list((tmp_path / "out").glob("vk_wall_post_*.json"))) == 1
 
 
+def test_wb_pinterest_cycle_dry_run_plans_and_publishes_new_products(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeResult:
+        nm_ids = [1002, 1001]
+        products = [
+            make_product(
+                nm_id=1002,
+                title="Шапка женская вязаная",
+                description="Теплая шапка с отворотом для прохладной погоды.",
+                price=1490,
+                stock=1,
+            ),
+            make_product(nm_id=1001, title="Old browser product", price=990, stock=1),
+        ]
+        output_path = tmp_path / "scan.json"
+        iterations = 3
+
+    monkeypatch.setattr(cli_module, "collect_wb_seller_product_cards", lambda **kwargs: FakeResult())
+    monkeypatch.setenv("ZERNIO_PINTEREST_BOARD_ID", "zernio-board-1")
+    db_path = tmp_path / "app.sqlite3"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_seen_nm_ids([1001], source="wb-browser", mark_baseline=True)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "wb-pinterest-cycle",
+            "--seller-url",
+            "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1",
+            "--db-path",
+            str(db_path),
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--dry-run",
+        ],
+    )
+
+    store = Store(db_path)
+    posts = store.list_posts(platform="pinterest", status=PostStatus.DRY_RUN_PUBLISHED)
+    assert result.exit_code == 0
+    assert "Step 2/3: publish Pinterest dry-run" in result.output
+    assert "Processed 1 planned posts: 1 ok, 0 failed." in result.output
+    assert len(posts) == 1
+    assert posts[0].payload["pinterest"]["board_id"] == "zernio-board-1"
+    assert "Теплая шапка" in posts[0].payload["pinterest"]["description"]
+    assert len(list((tmp_path / "out").glob("pinterest_pin_*.json"))) == 1
+
+
+def test_wb_pinterest_cycle_real_publish_can_use_zernio(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeResult:
+        nm_ids = [1002, 1001]
+        products = [
+            make_product(
+                nm_id=1002,
+                title="Шапка женская вязаная",
+                description="Теплая шапка с отворотом для прохладной погоды.",
+                price=1490,
+                stock=1,
+            ),
+            make_product(nm_id=1001, title="Old browser product", price=990, stock=1),
+        ]
+        output_path = tmp_path / "scan.json"
+        iterations = 3
+
+    class FakeZernioPinterestPublisher:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+        def publish(self, post_id: int, payload: dict[str, object]):
+            return PublishResult(status=PostStatus.PUBLISHED, external_id=f"zernio-{post_id}")
+
+    monkeypatch.setattr(cli_module, "collect_wb_seller_product_cards", lambda **kwargs: FakeResult())
+    monkeypatch.setattr(cli_module, "ZernioPinterestPublisher", FakeZernioPinterestPublisher)
+    monkeypatch.setenv("ZERNIO_API_KEY", "token")
+    monkeypatch.setenv("ZERNIO_ENABLE_REAL_PUBLISH", "1")
+    monkeypatch.setenv("ZERNIO_PINTEREST_ACCOUNT_ID", "acc-1")
+    monkeypatch.setenv("ZERNIO_PINTEREST_BOARD_ID", "zernio-board-1")
+    db_path = tmp_path / "app.sqlite3"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_seen_nm_ids([1001], source="wb-browser", mark_baseline=True)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "wb-pinterest-cycle",
+            "--seller-url",
+            "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1",
+            "--db-path",
+            str(db_path),
+            "--no-dry-run",
+            "--limit",
+            "1",
+        ],
+    )
+
+    posts = Store(db_path).list_posts(platform="pinterest", status=PostStatus.PUBLISHED)
+    assert result.exit_code == 0
+    assert "Step 2/3: publish Pinterest real Zernio" in result.output
+    assert "Processed 1 planned posts: 1 ok, 0 failed." in result.output
+    assert len(posts) == 1
+    assert posts[0].external_id == "zernio-1"
+
+
 def test_wb_vk_cycle_real_publish_requires_browser(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "app.sqlite3"
     store = Store(db_path)

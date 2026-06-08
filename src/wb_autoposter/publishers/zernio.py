@@ -40,10 +40,11 @@ class ZernioPublisher:
         board_id: str,
     ) -> PublishResult:
         request_body = build_zernio_pinterest_post(payload, account_id=account_id, board_id=board_id)
+        request_json = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
         response = self.client.post(
             "/posts",
             headers={**self._headers(), "x-request-id": _request_id("pinterest", post_id, request_body)},
-            json=request_body,
+            content=request_json,
         )
         response.raise_for_status()
         body = response.json()
@@ -66,7 +67,7 @@ class ZernioPublisher:
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
         }
 
     def _write_artifact(

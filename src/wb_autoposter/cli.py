@@ -262,6 +262,21 @@ def _vk_owner_id_for_planning(settings: Settings, override: str | None = None) -
     return override or settings.vk_owner_id or "-100000000"
 
 
+def _pinterest_board_id_for_planning(
+    settings: Settings,
+    override: str | None = None,
+    *,
+    prefer_zernio: bool = False,
+) -> str:
+    if override and override.strip():
+        return override
+    if settings.pinterest_board_id.strip() and settings.pinterest_board_id != "demo-board":
+        return settings.pinterest_board_id
+    if prefer_zernio and settings.zernio_pinterest_board_id:
+        return settings.zernio_pinterest_board_id
+    return settings.pinterest_board_id
+
+
 def _publish_planned_posts(store: Store, publisher, platform: str, limit: int | None = None) -> dict[str, int]:
     posts = store.list_posts(platform=platform, status=PostStatus.PLANNED)
     if limit is not None:
@@ -364,7 +379,7 @@ def _retry_failed_for_publish(
 ) -> dict[str, int]:
     return store.retry_failed_posts(
         platform=platform,
-        board_id=board_id or settings.pinterest_board_id,
+        board_id=_pinterest_board_id_for_planning(settings, board_id, prefer_zernio=platform == "pinterest"),
         vk_owner_id=_vk_owner_id_for_planning(settings, vk_owner_id),
         vk_from_group=settings.vk_from_group,
         vk_upload_photo=settings.vk_upload_photo,
@@ -464,7 +479,7 @@ def _sync_wb_browser_new_products(
         try:
             plan_result = store.plan_posts(
                 platform=platform,
-                board_id=board_id or settings.pinterest_board_id,
+                board_id=_pinterest_board_id_for_planning(settings, board_id, prefer_zernio=platform == "pinterest"),
                 vk_owner_id=_vk_owner_id_for_planning(settings, vk_owner_id),
                 vk_from_group=settings.vk_from_group,
                 vk_upload_photo=settings.vk_upload_photo,
@@ -1086,6 +1101,146 @@ def wb_vk_cycle(
     _print_wb_vk_cycle_summary(store=store, sync_result=sync_result, publish_result=publish_result)
 
 
+@app.command()
+def wb_pinterest_cycle(
+    seller_url: str = typer.Option(..., help="WB seller URL sorted by newness."),
+    scan_limit: int = typer.Option(100, help="How many top seller products to scan as newest candidates."),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--no-dry-run",
+        help="Dry-run is the safe default. Use --no-dry-run only for real Pinterest publishing.",
+    ),
+    zernio: bool = typer.Option(
+        True,
+        "--zernio/--direct-api",
+        help="Use Zernio for real Pinterest publishing. --direct-api uses Pinterest API settings.",
+    ),
+    limit: int | None = typer.Option(None, help="Maximum number of Pinterest posts to process."),
+    board_id: str | None = typer.Option(None, help="Pinterest board ID used for planning."),
+    db_path: Path | None = typer.Option(None, help="SQLite database path."),
+    user_data_dir: Path | None = typer.Option(
+        None,
+        help="Persistent WB browser profile directory. Use the same profile as wb-browser-baseline.",
+    ),
+    browser_engine: str = typer.Option(
+        "selenium",
+        help="WB browser engine: selenium or playwright. Selenium uses undetected_chromedriver.",
+    ),
+    output_path: Path | None = typer.Option(None, help="Where to save scanned WB product cards JSON."),
+    state_path: Path | None = typer.Option(None, help="Optional WB browser storage state path."),
+    browser_channel: str | None = typer.Option("chrome", help="Browser channel for Playwright launch."),
+    cdp_url: str | None = typer.Option(None, help="Connect to an already running Chrome via CDP."),
+    chrome_binary: Path | None = typer.Option(None, help="Path to chrome.exe for Selenium/undetected_chromedriver."),
+    chromedriver_path: Path | None = typer.Option(None, help="Explicit chromedriver path for Selenium."),
+    auto_install_driver: bool = typer.Option(
+        True,
+        "--auto-install-driver/--no-auto-install-driver",
+        help="Let chromedriver-autoinstaller install a matching driver when no explicit path is provided.",
+    ),
+    headless: bool = typer.Option(False, help="Run WB browser headless. Visible mode is recommended for WB checks."),
+    manual_ready: bool = typer.Option(
+        False,
+        "--manual-ready/--no-manual-ready",
+        help="Wait for Enter before scanning. Disabled by default.",
+    ),
+    ready_delay_seconds: float = typer.Option(2.0, help="Delay before scanning when --no-manual-ready is used."),
+    max_scrolls: int = typer.Option(80, help="Maximum WB scroll attempts."),
+    idle_scrolls: int = typer.Option(8, help="Stop WB scan after this many scrolls without new nmIDs."),
+    scroll_delay_ms: int = typer.Option(1400, help="Maximum wait for WB products to load after each scroll."),
+    scroll_pixels: int = typer.Option(1800, help="Vertical pixels per WB scroll step."),
+    out_dir: Path | None = typer.Option(None, help="Output directory for dry-run payloads and Zernio artifacts."),
+) -> None:
+    """Run the regular WB -> Pinterest cycle after baseline: scan, plan, publish/dry-run, status."""
+    settings = load_settings()
+    store = Store(db_path or settings.db_path)
+    store.init_db()
+    _ensure_wb_browser_baseline(store)
+
+    resolved_output_path = output_path or settings.out_dir / "wb_browser_new_scan_products.json"
+    resolved_state_path = state_path or settings.out_dir / "wb_browser_state.json"
+    planning_board_id = _pinterest_board_id_for_planning(settings, board_id, prefer_zernio=zernio)
+
+    typer.echo("Step 1/3: scan WB new products")
+    sync_result = _sync_wb_browser_new_products(
+        settings=settings,
+        store=store,
+        seller_url=seller_url,
+        browser_engine=browser_engine,
+        scan_limit=scan_limit,
+        platform="pinterest",
+        board_id=planning_board_id,
+        vk_owner_id=None,
+        output_path=resolved_output_path,
+        state_path=resolved_state_path,
+        browser_channel=browser_channel,
+        user_data_dir=user_data_dir,
+        cdp_url=cdp_url,
+        chrome_binary=chrome_binary,
+        chromedriver_path=chromedriver_path,
+        auto_install_driver=auto_install_driver,
+        headless=headless,
+        manual_ready=manual_ready,
+        ready_delay_seconds=ready_delay_seconds,
+        max_scrolls=max_scrolls,
+        idle_scrolls=idle_scrolls,
+        scroll_delay_ms=scroll_delay_ms,
+        scroll_pixels=scroll_pixels,
+        plan=True,
+    )
+    _print_wb_browser_sync_result(sync_result)
+
+    retry_result = _retry_failed_for_publish(
+        store,
+        settings,
+        platform="pinterest",
+        board_id=planning_board_id,
+    )
+    if retry_result["retried"] or retry_result["skipped_ineligible"] or retry_result["skipped_missing_product"]:
+        typer.echo(
+            f"Auto-retried {retry_result['retried']} failed posts. "
+            f"Skipped ineligible: {retry_result['skipped_ineligible']}. "
+            f"Skipped missing products: {retry_result['skipped_missing_product']}."
+        )
+
+    planned_posts = store.list_posts(platform="pinterest", status=PostStatus.PLANNED)
+    if not planned_posts:
+        typer.echo("No new products found. Nothing to publish.")
+        _print_wb_pinterest_cycle_summary(
+            store=store,
+            sync_result=sync_result,
+            publish_result={"processed": 0, "published": 0, "failed": 0},
+        )
+        return
+
+    if dry_run:
+        typer.echo("\nStep 2/3: publish Pinterest dry-run")
+    elif zernio:
+        typer.echo("\nStep 2/3: publish Pinterest real Zernio")
+    else:
+        typer.echo("\nStep 2/3: publish Pinterest real direct API")
+
+    publisher = _build_social_publisher(
+        settings,
+        "pinterest",
+        dry_run=dry_run,
+        out_dir=out_dir or settings.out_dir,
+        zernio=zernio,
+    )
+    publish_result = _publish_planned_posts(
+        store,
+        publisher,
+        "pinterest",
+        limit=_publish_limit(settings, "pinterest", limit),
+    )
+    typer.echo(
+        f"Processed {publish_result['processed']} planned posts: "
+        f"{publish_result['published']} ok, {publish_result['failed']} failed."
+    )
+
+    typer.echo("\nStep 3/3: status")
+    _print_wb_pinterest_cycle_summary(store=store, sync_result=sync_result, publish_result=publish_result)
+
+
 def _print_wb_vk_cycle_summary(
     *,
     store: Store,
@@ -1096,6 +1251,24 @@ def _print_wb_vk_cycle_summary(
     plan_result = sync_result.get("plan_result") or {}
     summary = store.summary()
     typer.echo("WB -> VK cycle summary")
+    typer.echo(f"Scanned products: {seen_result['total']}")
+    typer.echo(f"New nmIDs found: {seen_result['created']}")
+    typer.echo(f"Planned posts created: {plan_result.get('planned', 0)}")
+    typer.echo(f"Published / dry-run published: {publish_result['published']}")
+    typer.echo(f"Failed: {publish_result['failed']}")
+    typer.echo(f"Posts by status: {summary['posts_by_status']}")
+
+
+def _print_wb_pinterest_cycle_summary(
+    *,
+    store: Store,
+    sync_result: dict[str, object],
+    publish_result: dict[str, int],
+) -> None:
+    seen_result = sync_result["seen_result"]
+    plan_result = sync_result.get("plan_result") or {}
+    summary = store.summary()
+    typer.echo("WB -> Pinterest cycle summary")
     typer.echo(f"Scanned products: {seen_result['total']}")
     typer.echo(f"New nmIDs found: {seen_result['created']}")
     typer.echo(f"Planned posts created: {plan_result.get('planned', 0)}")
@@ -1214,7 +1387,7 @@ def plan_posts(
     try:
         result = store.plan_posts(
             platform=platform,
-            board_id=board_id or settings.pinterest_board_id,
+            board_id=_pinterest_board_id_for_planning(settings, board_id, prefer_zernio=platform == "pinterest"),
             vk_owner_id=_vk_owner_id_for_planning(settings, vk_owner_id),
             vk_from_group=settings.vk_from_group,
             vk_upload_photo=settings.vk_upload_photo,
@@ -1241,7 +1414,7 @@ def retry_failed(
     store.init_db()
     result = store.retry_failed_posts(
         platform=platform,
-        board_id=board_id or settings.pinterest_board_id,
+        board_id=_pinterest_board_id_for_planning(settings, board_id, prefer_zernio=platform == "pinterest"),
         vk_owner_id=_vk_owner_id_for_planning(settings, vk_owner_id),
         vk_from_group=settings.vk_from_group,
         vk_upload_photo=settings.vk_upload_photo,
@@ -1273,7 +1446,7 @@ def recover_publishing(
     result = store.recover_publishing_posts(
         platform=platform,
         action=action,
-        board_id=board_id or settings.pinterest_board_id,
+        board_id=_pinterest_board_id_for_planning(settings, board_id, prefer_zernio=platform == "pinterest"),
         vk_owner_id=_vk_owner_id_for_planning(settings, vk_owner_id),
         vk_from_group=settings.vk_from_group,
         vk_upload_photo=settings.vk_upload_photo,
@@ -1491,7 +1664,7 @@ def _run_pipeline(
     try:
         plan_result = store.plan_posts(
             platform=platform,
-            board_id=board_id or settings.pinterest_board_id,
+            board_id=_pinterest_board_id_for_planning(settings, board_id, prefer_zernio=platform == "pinterest"),
             vk_owner_id=_vk_owner_id_for_planning(settings, vk_owner_id),
             vk_from_group=settings.vk_from_group,
             vk_upload_photo=settings.vk_upload_photo,

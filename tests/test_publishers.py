@@ -160,6 +160,8 @@ def test_zernio_pinterest_publisher_posts_to_zernio(tmp_path: Path) -> None:
         transport=httpx.MockTransport(handler),
     )
     payload = build_pinterest_payload(make_product(), "board-1")
+    payload["pinterest"]["title"] = "Шапка вязаная"
+    payload["pinterest"]["description"] = "Шапка с отворотом. Цена: 1 000 руб."
 
     result = ZernioPinterestPublisher(
         "token",
@@ -175,8 +177,11 @@ def test_zernio_pinterest_publisher_posts_to_zernio(tmp_path: Path) -> None:
     assert Path(result.payload_path).exists()
     assert requests[0].url.path == "/api/v1/posts"
     assert requests[0].headers["Authorization"] == "Bearer token"
+    assert requests[0].headers["Content-Type"] == "application/json; charset=utf-8"
     assert "x-request-id" in requests[0].headers
+    assert "Шапка".encode("utf-8") in requests[0].content
     request_json = json.loads(requests[0].content)
+    assert request_json["content"] == "Шапка с отворотом. Цена: 1 000 руб."
     assert request_json["platforms"][0]["platform"] == "pinterest"
     assert request_json["platforms"][0]["accountId"] == "acc-1"
 

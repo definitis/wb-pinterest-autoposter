@@ -658,16 +658,9 @@ def build_social_payload(
     raise ValueError(f"Unsupported platform: {platform}")
 
 
-def _build_vk_message(product: Product, content: GeneratedContent, link: str) -> str:
-    parts = [content.title]
-    if product.price is not None:
-        parts.append(f"Цена: {product.price:,.0f} ₽".replace(",", " "))
-    if product.description.strip():
-        parts.append(product.description.strip())
-    parts.append(f"Смотреть на Wildberries: {link}")
-    if content.hashtags:
-        parts.append(" ".join(content.hashtags))
-    return "\n\n".join(parts)
+def _build_vk_message(_product: Product, content: GeneratedContent, link: str) -> str:
+    parts = [content.description, f"Ссылка на Вайлдберриз: {link}"]
+    return "\n\n".join(part for part in parts if part.strip())
 
 
 def build_tracked_link(url: str, nm_id: int, tracking_params: dict[str, str] | None = None) -> str:
