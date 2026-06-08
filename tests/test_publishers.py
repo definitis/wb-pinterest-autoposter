@@ -10,6 +10,8 @@ from wb_autoposter.models import PostStatus
 from wb_autoposter.publishers.pinterest import PinterestDryRunPublisher
 from wb_autoposter.publishers.pinterest import PinterestApiPublisher
 from wb_autoposter.publishers.pinterest import validate_pinterest_payload
+from wb_autoposter.publishers.zernio import ZernioPinterestPublisher, ZernioPublisher
+from wb_autoposter.publishers.zernio import build_zernio_pinterest_post
 from wb_autoposter.storage import build_pinterest_payload
 
 from helpers import make_product
@@ -119,3 +121,80 @@ def test_validate_pinterest_payload_rejects_bad_link() -> None:
 
     with pytest.raises(ValueError, match="link"):
         validate_pinterest_payload(payload)
+
+
+def test_build_zernio_pinterest_post_maps_existing_pinterest_payload() -> None:
+    product = make_product()
+    payload = build_pinterest_payload(product, "old-board")
+
+    zernio_payload = build_zernio_pinterest_post(payload, account_id="acc-1", board_id="board-1")
+
+    assert zernio_payload["content"] == payload["pinterest"]["description"]
+    assert zernio_payload["mediaItems"] == [
+        {"type": "image", "url": product.photos[0], "title": payload["pinterest"]["title"]}
+    ]
+    assert zernio_payload["platforms"] == [
+        {
+            "platform": "pinterest",
+            "accountId": "acc-1",
+            "platformSpecificData": {
+                "title": payload["pinterest"]["title"],
+                "boardId": "board-1",
+                "link": payload["pinterest"]["link"],
+            },
+        }
+    ]
+    assert zernio_payload["publishNow"] is True
+    assert zernio_payload["metadata"]["productNmId"] == product.nm_id
+
+
+def test_zernio_pinterest_publisher_posts_to_zernio(tmp_path: Path) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201, json={"post": {"_id": "zp-123", "status": "publishing"}})
+
+    client = httpx.Client(
+        base_url=ZernioPublisher.base_url,
+        transport=httpx.MockTransport(handler),
+    )
+    payload = build_pinterest_payload(make_product(), "board-1")
+
+    result = ZernioPinterestPublisher(
+        "token",
+        account_id="acc-1",
+        board_id="board-1",
+        out_dir=tmp_path,
+        client=client,
+    ).publish(7, payload)
+
+    assert result.status == PostStatus.PUBLISHED
+    assert result.external_id == "zp-123"
+    assert result.payload_path is not None
+    assert Path(result.payload_path).exists()
+    assert requests[0].url.path == "/api/v1/posts"
+    assert requests[0].headers["Authorization"] == "Bearer token"
+    assert "x-request-id" in requests[0].headers
+    request_json = json.loads(requests[0].content)
+    assert request_json["platforms"][0]["platform"] == "pinterest"
+    assert request_json["platforms"][0]["accountId"] == "acc-1"
+
+
+def test_zernio_publisher_lists_accounts() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"accounts": [{"_id": "acc-1", "platform": "pinterest"}]})
+
+    client = httpx.Client(
+        base_url=ZernioPublisher.base_url,
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = ZernioPublisher("token", client=client).list_accounts(platform="pinterest")
+
+    assert result["accounts"][0]["_id"] == "acc-1"
+    assert requests[0].url.path == "/api/v1/accounts"
+    assert requests[0].url.params["platform"] == "pinterest"

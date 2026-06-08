@@ -3,6 +3,7 @@ from wb_autoposter.publishers.instagram import InstagramApiPublisher
 from wb_autoposter.publishers.pinterest import PinterestApiPublisher, PinterestDryRunPublisher
 from wb_autoposter.publishers.vk import VKApiPublisher, VKDryRunPublisher
 from wb_autoposter.publishers.vk_browser import VKBrowserPublisher
+from wb_autoposter.publishers.zernio import ZernioPinterestPublisher, ZernioPublisher
 
 __all__ = [
     "InstagramApiPublisher",
@@ -12,4 +13,6 @@ __all__ = [
     "VKApiPublisher",
     "VKBrowserPublisher",
     "VKDryRunPublisher",
+    "ZernioPinterestPublisher",
+    "ZernioPublisher",
 ]

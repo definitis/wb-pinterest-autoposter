@@ -9,6 +9,7 @@ MVP для автопостинга новых товаров бренда с Wi
 - WB API режим подготовлен: после токенов можно переключить источник с локального JSON на WB API.
 - Для реальной работы есть baseline: первый sync фиксирует текущий ассортимент как уже известный, чтобы не постить старые товары.
 - Pinterest и Instagram не входят в основной сценарий показа. Они оставлены как дополнительные API-ready направления.
+- Zernio изучен как практичный путь для Pinterest/Instagram без отдельных developer apps на стороне проекта.
 - Тесты: `python -m pytest`.
 
 
@@ -131,6 +132,8 @@ python -m wb_autoposter.cli wb-vk-cycle --seller-url "https://www.wildberries.ru
 python -m wb_autoposter.cli wb-vk-cycle --seller-url "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1" --scan-limit 100 --user-data-dir out\wb_chrome_profile_baseline --browser --no-dry-run --limit 3
 ```
 
+Публикация идет последовательно: один товар = один пост. За один запуск можно обработать до N постов; N задается параметром `--limit`, а значение по умолчанию берется из `VK_POST_LIMIT_PER_RUN`.
+
 Команда делает:
 
 ```text
@@ -161,7 +164,7 @@ No new products found. Nothing to publish.
 
 - dry-run payload для проверки без публикации;
 - реальная публикация поста с текстом и картинкой через Playwright/browser automation;
-- batch-публикация нескольких товаров в одной браузерной сессии;
+- последовательная публикация до N товаров за один запуск в одной браузерной сессии;
 - защита от повторной публикации одного товара в VK;
 - статусы `planned`, `publishing`, `published`, `failed`, `dry_run_published`.
 
@@ -181,6 +184,26 @@ Pinterest и Instagram не входят в основной сценарий п
 **Pinterest:** подготовлены dry-run payload, validation и API-ready publisher для `POST /v5/pins`. Реальная публикация требует approved Pinterest Developer App, сайта/privacy policy и OAuth token с правами `pins:write`/`boards:write`.
 
 **Instagram:** подготовлен skeleton под Meta Graph API, но реальный запуск требует Instagram Business/Creator, связку с Facebook Page и Meta app permissions.
+
+**Zernio:** по публичной документации Zernio подходит как альтернативный слой реальной публикации для Pinterest и Instagram. Он дает единый API `https://zernio.com/api/v1`, авторизацию через `ZERNIO_API_KEY`, OAuth-подключение аккаунтов, `POST /posts` для публикации/планирования, `mediaItems` для изображений/видео и analytics API. Важно: реальный прогон все равно требует зарегистрировать Zernio-аккаунт, получить API key и подключить Pinterest/Instagram аккаунты через OAuth. На 08.06.2026 в документации указано, что первые 2 подключенных аккаунта бесплатны, без карты, с полным API-доступом.
+
+Как это отработать в проекте:
+
+1. Создать Zernio profile и сохранить его ID.
+2. Подключить Pinterest/Instagram через `GET /connect/{platform}`; для Pinterest выбрать board и сохранить `accountId`/`boardId`.
+3. Добавить отдельный `ZernioPublisher`, который принимает уже готовый post payload из текущей системы.
+4. Для Pinterest отправлять `content`, `mediaItems: [{type: "image", url: "..."}]`, `platforms: [{platform: "pinterest", accountId, platformSpecificData: {boardId, title, link}}]`, `publishNow: true`.
+5. Для Instagram отправлять `content`, `mediaItems`, `platforms: [{platform: "instagram", accountId, platformSpecificData: {contentType}}]`, `publishNow: true`; ссылку на WB лучше дублировать в `firstComment` или вести через UTM/redirect, потому что Instagram плохо подходит для кликабельного внешнего трафика.
+6. Оставить safety-флаг: реальная публикация через Zernio должна запускаться только при `ZERNIO_ENABLE_REAL_PUBLISH=1`, наличии `ZERNIO_API_KEY` и нужных account/board IDs.
+
+Документация Zernio:
+
+- Quickstart: https://docs.zernio.com/
+- Create post: https://docs.zernio.com/posts/create-post
+- Connecting accounts: https://docs.zernio.com/guides/connecting-accounts
+- Pinterest: https://docs.zernio.com/platforms/pinterest
+- Instagram: https://docs.zernio.com/platforms/instagram
+- Pricing: https://docs.zernio.com/pricing
 
 ## Настройка VK И WB
 
@@ -464,7 +487,7 @@ product_nm_id + platform
 - `src/wb_autoposter/` - код приложения;
 - `tests/` - автотесты;
 - `data/fake_wb_products.json` - базовые demo-товары;
-- `data/vk_batch_products_2026_06_02.json` - отдельная фикстура для batch-проверки VK;
+- `data/vk_batch_products_2026_06_02.json` - отдельная фикстура для проверки последовательной публикации нескольких VK-постов;
 - `.env.example` - пример настроек без секретов;
 - `.env` - локальные настройки и токены, не должен попадать в репозиторий.
 
@@ -602,6 +625,38 @@ POST https://seller-analytics-api.wildberries.ru/api/v2/stocks-report/products/p
 
 Подготовлен `PinterestApiPublisher` и dry-run payload под Pinterest API v5. Реальная публикация требует approved Pinterest Developer App, сайта/privacy policy, OAuth token и scopes `pins:write`/`boards:write`, поэтому канал оставлен в roadmap.
 
+**Zernio для Pinterest/Instagram**
+
+Zernio выглядит более быстрым путем для пилота Pinterest/Instagram, чем прямое подключение официальных API в этом проекте:
+
+- Zernio сам закрывает developer apps/approvals платформ и дает единый `POST /api/v1/posts`;
+- аккаунты подключаются через OAuth, а после подключения проект работает с Zernio `accountId`;
+- картинки можно передавать как публичные media URLs или через presigned upload Zernio;
+- Pinterest требует `boardId`; его можно выбрать во время подключения или получить из Zernio после подключения;
+- Instagram поддерживает feed, stories, reels и carousel, но для товарных ссылок лучше использовать UTM/redirect и/или первый комментарий;
+- `POST /posts` возвращает Zernio post `_id` и статус, а опубликованные посты можно затем читать через list/get posts; analytics API покрывает impressions/clicks/saves для Pinterest и reach/likes/comments/saves/views для Instagram.
+
+Минимальные env-поля для будущей интеграции:
+
+```text
+ZERNIO_API_KEY=
+ZERNIO_ENABLE_REAL_PUBLISH=0
+ZERNIO_PROFILE_ID=
+ZERNIO_PINTEREST_ACCOUNT_ID=
+ZERNIO_PINTEREST_BOARD_ID=
+ZERNIO_INSTAGRAM_ACCOUNT_ID=
+ZERNIO_INSTAGRAM_CONTENT_TYPE=feed
+```
+
+Доступный CLI без ломки текущей архитектуры:
+
+```bash
+python -m wb_autoposter.cli zernio-check --platform pinterest
+python -m wb_autoposter.cli publish --platform pinterest --zernio --no-dry-run
+```
+
+Реальный Zernio-publish для Pinterest добавлен отдельным publisher и заблокирован safety-флагом. Он запускается только при `ZERNIO_ENABLE_REAL_PUBLISH=1`, заполненных `ZERNIO_API_KEY`, `ZERNIO_PINTEREST_ACCOUNT_ID` и `ZERNIO_PINTEREST_BOARD_ID`. Instagram оставлен следующим шагом после проверки Pinterest.
+
 **VK API**
 
 Подготовлен `VKApiPublisher` для `wall.post` и цепочки загрузки фото. Также есть `vk-check --api` и `vk-check --api --photo-upload`.
@@ -659,6 +714,8 @@ VK_POST_LIMIT_PER_RUN=3
 
 Поля для WB API, VK API, Pinterest, Instagram и `wb-public` не нужны для текущего реального VK MVP. Они поддержаны в коде как roadmap/API-ready направления, но не входят в основной сценарий показа и не добавлены в `.env.example`.
 
+Для Zernio-пилота дополнительно понадобятся `ZERNIO_API_KEY`, ID подключенных аккаунтов и `ZERNIO_PINTEREST_BOARD_ID`. Пока этих доступов нет, dry-run Pinterest/Instagram остается безопасным локальным режимом.
+
 ## Что Запросить У Заказчика
 
 Для пилота VK:
@@ -676,6 +733,14 @@ VK_POST_LIMIT_PER_RUN=3
 - VK user OAuth/API-доступ для публикации с фото;
 - VPS/Docker/scheduler, если нужен регулярный запуск без ноутбука;
 - Pinterest approved app, рабочий сайт и privacy policy, если Pinterest остается в плане.
+
+Для Zernio-пилота Pinterest/Instagram:
+
+- Zernio account и API key;
+- подключенный Pinterest account и board ID;
+- подключенный Instagram account;
+- публично доступные URL изображений товаров или разрешение использовать Zernio media upload;
+- подтверждение, какие платформы запускать в real publish и какой лимит постов за запуск использовать.
 
 ## Экономика
 
@@ -768,5 +833,7 @@ python -m pytest
 8. Добавить redirect tracking: `social -> наш redirect -> WB`, чтобы считать клики.
 9. Перенести пилот на VPS/Docker/scheduler.
 10. Добавить простой web-admin.
-11. Pinterest real publish: получить approved Pinterest Developer App, сайт/домен, privacy policy и OAuth token.
-12. Instagram: подключать только если бизнесу важнее охват, чем кликабельный внешний трафик.
+11. Zernio publisher для Pinterest - добавлен; нужен `zernio-check` после подключения аккаунта и затем один контролируемый real publish.
+12. Zernio publisher для Instagram - следующий шаг после проверки Pinterest.
+13. Pinterest direct API: оставить как альтернативу, если заказчик хочет свой approved Pinterest Developer App, сайт/домен, privacy policy и OAuth token.
+14. Instagram direct API: подключать только если бизнесу важнее охват, чем кликабельный внешний трафик, либо если Zernio не подходит.

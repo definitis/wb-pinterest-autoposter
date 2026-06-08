@@ -22,15 +22,15 @@ class TemplateContentGenerator:
 
     def generate(self, product: Product) -> GeneratedContent:
         title = _limit(product.title.strip(), 100)
-        cta = "Смотреть на Wildberries"
+        cta = "Open on Wildberries"
         hashtags = _build_hashtags(product.brand)
 
         parts = []
         if product.description.strip():
             parts.append(product.description.strip())
-        parts.append(f"{product.brand} на Wildberries.")
+        parts.append(f"{product.brand} on Wildberries.")
         if product.price is not None:
-            parts.append(f"Цена: {_format_price(product.price)}.")
+            parts.append(f"Price: {_format_price(product.price)}.")
         parts.append(cta + ".")
 
         description = _limit(" ".join(parts), 420)
@@ -46,17 +46,17 @@ class TemplateContentGenerator:
 
 def _build_hashtags(brand: str) -> list[str]:
     brand_tag = re.sub(r"\W+", "", brand, flags=re.UNICODE)
-    tags = ["#Wildberries", "#Одежда"]
+    tags = ["#Wildberries", "#Fashion"]
     if brand_tag:
         tags.insert(0, f"#{brand_tag}")
     return tags[:3]
 
 
 def _format_price(price: float) -> str:
-    return f"{price:,.0f}".replace(",", " ") + " ₽"
+    return f"{price:,.0f}".replace(",", " ") + " RUB"
 
 
 def _limit(value: str, max_length: int) -> str:
     if len(value) <= max_length:
         return value
-    return value[: max_length - 1].rstrip() + "…"
+    return value[: max_length - 1].rstrip() + "..."

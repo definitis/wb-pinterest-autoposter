@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 import wb_autoposter.cli as cli_module
 from wb_autoposter.adapters.fake_wb import FakeWBSource
 from wb_autoposter.cli import app
-from wb_autoposter.models import PostStatus
+from wb_autoposter.models import PostStatus, PublishResult
 from wb_autoposter.storage import Store
 
 from helpers import make_product
@@ -270,6 +270,66 @@ def test_non_dry_run_publish_is_blocked_without_mutating_posts(tmp_path: Path, f
     assert len(store.list_posts(platform="pinterest", status=PostStatus.PLANNED)) == 4
     assert store.list_posts(platform="pinterest", status=PostStatus.FAILED) == []
     assert store.list_posts(platform="pinterest", status=PostStatus.DRY_RUN_PUBLISHED) == []
+
+
+def test_zernio_publish_is_blocked_without_safety_flag(
+    tmp_path: Path,
+    fixture_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ZERNIO_API_KEY", "token")
+    monkeypatch.setenv("ZERNIO_PINTEREST_ACCOUNT_ID", "acc-1")
+    monkeypatch.setenv("ZERNIO_PINTEREST_BOARD_ID", "board-1")
+    monkeypatch.setenv("ZERNIO_ENABLE_REAL_PUBLISH", "0")
+    db_path = tmp_path / "app.sqlite3"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_products(FakeWBSource(fixture_path).fetch_products())
+    store.plan_posts(platform="pinterest", board_id="demo-board")
+
+    result = CliRunner().invoke(
+        app,
+        ["publish", "--platform", "pinterest", "--zernio", "--no-dry-run", "--db-path", str(db_path)],
+    )
+
+    assert result.exit_code != 0
+    assert "Real Zernio publishing is disabled" in result.output
+    assert len(store.list_posts(platform="pinterest", status=PostStatus.PLANNED)) == 4
+
+
+def test_publish_cli_can_use_zernio_pinterest_publisher(
+    tmp_path: Path,
+    fixture_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeZernioPinterestPublisher:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+        def publish(self, post_id: int, payload: dict[str, object]):
+            return PublishResult(status=PostStatus.PUBLISHED, external_id=f"zernio-{post_id}")
+
+    monkeypatch.setattr(cli_module, "ZernioPinterestPublisher", FakeZernioPinterestPublisher)
+    monkeypatch.setenv("ZERNIO_API_KEY", "token")
+    monkeypatch.setenv("ZERNIO_PINTEREST_ACCOUNT_ID", "acc-1")
+    monkeypatch.setenv("ZERNIO_PINTEREST_BOARD_ID", "board-1")
+    monkeypatch.setenv("ZERNIO_ENABLE_REAL_PUBLISH", "1")
+    db_path = tmp_path / "app.sqlite3"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_products([FakeWBSource(fixture_path).fetch_products()[0]])
+    store.plan_posts(platform="pinterest", board_id="demo-board")
+
+    result = CliRunner().invoke(
+        app,
+        ["publish", "--platform", "pinterest", "--zernio", "--no-dry-run", "--db-path", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    published_posts = store.list_posts(platform="pinterest", status=PostStatus.PUBLISHED)
+    assert len(published_posts) == 1
+    assert published_posts[0].external_id == "zernio-1"
 
 
 def test_failed_publish_does_not_leave_post_planned(tmp_path: Path, fixture_path: Path, monkeypatch) -> None:

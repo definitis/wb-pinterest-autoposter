@@ -55,6 +55,24 @@ def test_load_settings_reads_post_limits(monkeypatch) -> None:
     assert settings.vk_post_limit_per_run == 3
 
 
+def test_load_settings_reads_zernio_settings(monkeypatch) -> None:
+    monkeypatch.setenv("ZERNIO_API_KEY", "token")
+    monkeypatch.setenv("ZERNIO_ENABLE_REAL_PUBLISH", "1")
+    monkeypatch.setenv("ZERNIO_PINTEREST_ACCOUNT_ID", "acc-pin")
+    monkeypatch.setenv("ZERNIO_PINTEREST_BOARD_ID", "board-pin")
+    monkeypatch.setenv("ZERNIO_INSTAGRAM_ACCOUNT_ID", "acc-ig")
+    monkeypatch.setenv("ZERNIO_INSTAGRAM_CONTENT_TYPE", "story")
+
+    settings = load_settings()
+
+    assert settings.zernio_api_key == "token"
+    assert settings.zernio_enable_real_publish is True
+    assert settings.zernio_pinterest_account_id == "acc-pin"
+    assert settings.zernio_pinterest_board_id == "board-pin"
+    assert settings.zernio_instagram_account_id == "acc-ig"
+    assert settings.zernio_instagram_content_type == "story"
+
+
 def test_load_settings_reads_wb_public_limits(monkeypatch) -> None:
     monkeypatch.setenv("WB_PUBLIC_QUERY", "hm")
     monkeypatch.setenv("WB_PUBLIC_BASELINE_LIMIT", "500")

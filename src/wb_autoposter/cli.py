@@ -17,6 +17,8 @@ from wb_autoposter.publishers import (
     VKApiPublisher,
     VKBrowserPublisher,
     VKDryRunPublisher,
+    ZernioPinterestPublisher,
+    ZernioPublisher,
 )
 from wb_autoposter.publishers.pinterest import validate_pinterest_payload
 from wb_autoposter.publishers.vk import build_vk_oauth_url, validate_vk_payload
@@ -174,12 +176,23 @@ def _validate_platform(platform: str) -> None:
         raise typer.BadParameter("platform must be 'pinterest' or 'vk'.")
 
 
-def _build_social_publisher(settings: Settings, platform: str, dry_run: bool, out_dir: Path, browser: bool = False):
+def _build_social_publisher(
+    settings: Settings,
+    platform: str,
+    dry_run: bool,
+    out_dir: Path,
+    browser: bool = False,
+    zernio: bool = False,
+):
     _validate_platform(platform)
     if platform == "pinterest":
         if browser:
             raise typer.BadParameter("--browser is only supported for VK publishing.")
+        if zernio and not dry_run:
+            return _build_zernio_pinterest_publisher(settings, out_dir)
         return _build_pinterest_publisher(settings, dry_run, out_dir)
+    if zernio:
+        raise typer.BadParameter("--zernio is currently supported only for Pinterest publishing.")
     return _build_vk_publisher(settings, dry_run, out_dir, browser=browser)
 
 
@@ -193,6 +206,25 @@ def _build_pinterest_publisher(settings: Settings, dry_run: bool, out_dir: Path)
     if not settings.pinterest_access_token:
         raise typer.BadParameter("PINTEREST_ACCESS_TOKEN is required for real Pinterest publishing.")
     return PinterestApiPublisher(settings.pinterest_access_token)
+
+
+def _build_zernio_pinterest_publisher(settings: Settings, out_dir: Path):
+    if not settings.zernio_enable_real_publish:
+        raise typer.BadParameter(
+            "Real Zernio publishing is disabled. Set ZERNIO_ENABLE_REAL_PUBLISH=1 to enable it."
+        )
+    if not settings.zernio_api_key:
+        raise typer.BadParameter("ZERNIO_API_KEY is required for real Zernio publishing.")
+    if not settings.zernio_pinterest_account_id:
+        raise typer.BadParameter("ZERNIO_PINTEREST_ACCOUNT_ID is required for Zernio Pinterest publishing.")
+    if not settings.zernio_pinterest_board_id:
+        raise typer.BadParameter("ZERNIO_PINTEREST_BOARD_ID is required for Zernio Pinterest publishing.")
+    return ZernioPinterestPublisher(
+        settings.zernio_api_key,
+        account_id=settings.zernio_pinterest_account_id,
+        board_id=settings.zernio_pinterest_board_id,
+        out_dir=out_dir,
+    )
 
 
 def _build_vk_publisher(settings: Settings, dry_run: bool, out_dir: Path, *, browser: bool = False):
@@ -543,6 +575,46 @@ def pinterest_check(
         typer.echo(f"Pinterest API board check OK: {board.get('id')}")
     else:
         typer.echo("Pinterest API board check skipped. Use --api after setting PINTEREST_ACCESS_TOKEN.")
+
+
+@app.command()
+def zernio_check(
+    platform: str = typer.Option("pinterest", help="Zernio platform to inspect: pinterest or instagram."),
+) -> None:
+    """Check Zernio API access and list connected accounts without publishing."""
+    settings = load_settings()
+    if platform not in {"pinterest", "instagram"}:
+        raise typer.BadParameter("platform must be 'pinterest' or 'instagram'.")
+
+    typer.echo("Zernio local configuration")
+    typer.echo(f"API key configured: {bool(settings.zernio_api_key)}")
+    typer.echo(f"Real publish enabled: {settings.zernio_enable_real_publish}")
+    if platform == "pinterest":
+        typer.echo(f"Pinterest account ID configured: {settings.zernio_pinterest_account_id or '-'}")
+        typer.echo(f"Pinterest board ID configured: {settings.zernio_pinterest_board_id or '-'}")
+    else:
+        typer.echo(f"Instagram account ID configured: {settings.zernio_instagram_account_id or '-'}")
+        typer.echo(f"Instagram content type: {settings.zernio_instagram_content_type}")
+
+    if not settings.zernio_api_key:
+        raise typer.BadParameter("ZERNIO_API_KEY is required for zernio-check.")
+
+    try:
+        body = ZernioPublisher(settings.zernio_api_key).list_accounts(platform=platform)
+    except Exception as exc:  # pragma: no cover - defensive CLI boundary
+        raise typer.BadParameter(f"Zernio API check failed: {exc}") from exc
+
+    accounts = body.get("accounts")
+    if not isinstance(accounts, list):
+        accounts = []
+    typer.echo(f"Connected {platform} accounts: {len(accounts)}")
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        account_id = account.get("_id") or account.get("accountId") or account.get("id") or "-"
+        username = account.get("username") or account.get("displayName") or "-"
+        is_active = account.get("isActive")
+        typer.echo(f"- id={account_id} username={username} active={is_active}")
 
 
 @app.command()
@@ -1219,6 +1291,7 @@ def publish(
     dry_run: bool = typer.Option(True, help="Write social payloads to out/ instead of calling API."),
     platform: str = typer.Option("pinterest", help="Target platform: pinterest or vk."),
     browser: bool = typer.Option(False, "--browser", help="Publish VK posts through a logged-in browser session."),
+    zernio: bool = typer.Option(False, "--zernio", help="Publish Pinterest posts through Zernio."),
     limit: int | None = typer.Option(None, help="Maximum number of planned posts to process."),
     retry_failed: bool = typer.Option(
         True,
@@ -1243,7 +1316,14 @@ def publish(
                 f"Skipped missing products: {retry_result['skipped_missing_product']}."
             )
     resolved_limit = _publish_limit(settings, platform, limit)
-    publisher = _build_social_publisher(settings, platform, dry_run, out_dir or settings.out_dir, browser=browser)
+    publisher = _build_social_publisher(
+        settings,
+        platform,
+        dry_run,
+        out_dir or settings.out_dir,
+        browser=browser,
+        zernio=zernio,
+    )
     result = _publish_planned_posts(store, publisher, platform, limit=resolved_limit)
 
     typer.echo(
