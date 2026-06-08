@@ -70,6 +70,8 @@ def test_load_settings_reads_zernio_settings(monkeypatch) -> None:
     monkeypatch.setenv("ZERNIO_PINTEREST_BOARD_ID", "board-pin")
     monkeypatch.setenv("ZERNIO_INSTAGRAM_ACCOUNT_ID", "acc-ig")
     monkeypatch.setenv("ZERNIO_INSTAGRAM_CONTENT_TYPE", "story")
+    monkeypatch.setenv("INSTAGRAM_ENABLE_REAL_PUBLISH", "1")
+    monkeypatch.setenv("INSTAGRAM_POST_LIMIT_PER_RUN", "2")
 
     settings = load_settings()
 
@@ -79,6 +81,8 @@ def test_load_settings_reads_zernio_settings(monkeypatch) -> None:
     assert settings.zernio_pinterest_board_id == "board-pin"
     assert settings.zernio_instagram_account_id == "acc-ig"
     assert settings.zernio_instagram_content_type == "story"
+    assert settings.instagram_enable_real_publish is True
+    assert settings.instagram_post_limit_per_run == 2
 
 
 def test_load_settings_reads_wb_public_limits(monkeypatch) -> None:

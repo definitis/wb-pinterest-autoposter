@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from wb_autoposter.models import PostStatus, PublishResult
+from wb_autoposter.publishers.instagram import validate_instagram_payload
 from wb_autoposter.publishers.pinterest import validate_pinterest_payload
 
 
@@ -58,6 +59,26 @@ class ZernioPublisher:
         )
         return PublishResult(status=PostStatus.PUBLISHED, external_id=zernio_post_id, payload_path=payload_path)
 
+    def publish_instagram(
+        self,
+        post_id: int,
+        payload: dict[str, Any],
+        *,
+        account_id: str,
+        content_type: str,
+    ) -> PublishResult:
+        request_body = build_zernio_instagram_post(payload, account_id=account_id, content_type=content_type)
+        body = self._post_with_utf8("instagram", post_id, request_body)
+        zernio_post_id = _extract_post_id(body)
+
+        payload_path = self._write_artifact(
+            post_id,
+            payload.get("product_nm_id", "unknown"),
+            request_body,
+            body,
+        )
+        return PublishResult(status=PostStatus.PUBLISHED, external_id=zernio_post_id, payload_path=payload_path)
+
     def list_accounts(self, *, platform: str | None = None) -> dict[str, Any]:
         params = {"platform": platform} if platform else None
         response = self.client.get("/accounts", headers=self._headers(), params=params)
@@ -69,6 +90,21 @@ class ZernioPublisher:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json; charset=utf-8",
         }
+
+    def _post_with_utf8(
+        self,
+        platform: str,
+        post_id: int,
+        request_body: dict[str, Any],
+    ) -> dict[str, Any]:
+        request_json = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
+        response = self.client.post(
+            "/posts",
+            headers={**self._headers(), "x-request-id": _request_id(platform, post_id, request_body)},
+            content=request_json,
+        )
+        response.raise_for_status()
+        return response.json()
 
     def _write_artifact(
         self,
@@ -130,6 +166,35 @@ class ZernioPinterestPublisher:
         )
 
 
+class ZernioInstagramPublisher:
+    """Adapter that matches the existing SocialPublisher publish(post_id, payload) shape."""
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        account_id: str,
+        content_type: str = "feed",
+        out_dir: Path | None = None,
+        client: httpx.Client | None = None,
+    ) -> None:
+        if not account_id.strip():
+            raise ValueError("Zernio Instagram account_id is required.")
+        if not content_type.strip():
+            raise ValueError("Zernio Instagram content_type is required.")
+        self.account_id = account_id.strip()
+        self.content_type = content_type.strip()
+        self.publisher = ZernioPublisher(api_key, out_dir=out_dir, client=client)
+
+    def publish(self, post_id: int, payload: dict[str, Any]) -> PublishResult:
+        return self.publisher.publish_instagram(
+            post_id,
+            payload,
+            account_id=self.account_id,
+            content_type=self.content_type,
+        )
+
+
 def build_zernio_pinterest_post(
     payload: dict[str, Any],
     *,
@@ -160,6 +225,43 @@ def build_zernio_pinterest_post(
                     "title": pin_payload["title"],
                     "boardId": board_id.strip(),
                     "link": pin_payload["link"],
+                },
+            }
+        ],
+        "publishNow": True,
+        "metadata": {
+            "source": "wb-autoposter",
+            "productNmId": payload.get("product_nm_id"),
+        },
+    }
+
+
+def build_zernio_instagram_post(
+    payload: dict[str, Any],
+    *,
+    account_id: str,
+    content_type: str,
+) -> dict[str, Any]:
+    if not account_id.strip():
+        raise ValueError("Zernio Instagram account_id is required.")
+    if not content_type.strip():
+        raise ValueError("Zernio Instagram content_type is required.")
+
+    instagram_payload = validate_instagram_payload(payload)
+    return {
+        "content": instagram_payload["caption"],
+        "mediaItems": [
+            {
+                "type": "image",
+                "url": instagram_payload["image_url"],
+            }
+        ],
+        "platforms": [
+            {
+                "platform": "instagram",
+                "accountId": account_id.strip(),
+                "platformSpecificData": {
+                    "contentType": content_type.strip(),
                 },
             }
         ],

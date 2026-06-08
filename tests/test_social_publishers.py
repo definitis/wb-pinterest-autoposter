@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import httpx
 import pytest
 
 from wb_autoposter.models import PostStatus
-from wb_autoposter.publishers.instagram import InstagramApiPublisher
+from wb_autoposter.publishers.instagram import InstagramApiPublisher, InstagramDryRunPublisher
 from wb_autoposter.publishers.vk import VKApiPublisher, VKDryRunPublisher, build_vk_oauth_url, validate_vk_payload
 from wb_autoposter.publishers.vk_browser import VKBrowserPublisher
 
@@ -335,6 +338,25 @@ def test_instagram_api_publisher_creates_container_then_publishes_media() -> Non
     assert requests[0].url.path == "/v25.0/ig-user-1/media"
     assert requests[1].url.path == "/v25.0/ig-user-1/media_publish"
     assert "creation_id=container-123" in requests[1].content.decode("utf-8")
+
+
+def test_instagram_dry_run_publisher_writes_payload(tmp_path) -> None:
+    payload = {
+        "product_nm_id": 123,
+        "instagram": {
+            "image_url": "https://example.com/photo.jpg",
+            "caption": "Шапка с отворотом",
+        },
+    }
+
+    result = InstagramDryRunPublisher(tmp_path).publish(5, payload)
+
+    output_path = Path(result.payload_path or "")
+    assert result.status == PostStatus.DRY_RUN_PUBLISHED
+    assert result.external_id == "dryrun-instagram-5"
+    assert output_path.exists()
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert written["request"]["form"]["caption"] == "Шапка с отворотом"
 
 
 def test_instagram_api_publisher_raises_without_container_id() -> None:

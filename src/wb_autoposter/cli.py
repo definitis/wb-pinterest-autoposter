@@ -12,14 +12,18 @@ from wb_autoposter.adapters.wb_browser import collect_wb_seller_nm_ids
 from wb_autoposter.config import Settings, load_settings
 from wb_autoposter.models import PostStatus
 from wb_autoposter.publishers import (
+    InstagramApiPublisher,
+    InstagramDryRunPublisher,
     PinterestApiPublisher,
     PinterestDryRunPublisher,
     VKApiPublisher,
     VKBrowserPublisher,
     VKDryRunPublisher,
+    ZernioInstagramPublisher,
     ZernioPinterestPublisher,
     ZernioPublisher,
 )
+from wb_autoposter.publishers.instagram import validate_instagram_payload
 from wb_autoposter.publishers.pinterest import validate_pinterest_payload
 from wb_autoposter.publishers.vk import build_vk_oauth_url, validate_vk_payload
 from wb_autoposter.publishers.vk_browser import save_vk_browser_login
@@ -30,7 +34,7 @@ app = typer.Typer(help="WB новинки -> VK/Pinterest autoposter MVP.")
 
 APP_MODES = {"test", "real-ready"}
 SOURCES = {"fake", "wb-api", "wb-public"}
-PLATFORMS = {"pinterest", "vk"}
+PLATFORMS = {"instagram", "pinterest", "vk"}
 
 
 def _resolve_source(settings: Settings, mode: str | None, source: str | None) -> tuple[str, str]:
@@ -156,7 +160,9 @@ def _tracking_params(settings: Settings, platform: str) -> dict[str, str] | None
         return _pinterest_tracking_params(settings)
     if platform == "vk":
         return _vk_tracking_params(settings)
-    raise typer.BadParameter("platform must be 'pinterest' or 'vk'.")
+    if platform == "instagram":
+        return None
+    raise typer.BadParameter("platform must be 'instagram', 'pinterest', or 'vk'.")
 
 
 def _publish_limit(settings: Settings, platform: str, override: int | None = None) -> int | None:
@@ -166,14 +172,16 @@ def _publish_limit(settings: Settings, platform: str, override: int | None = Non
         return override
     if platform == "pinterest":
         return settings.pinterest_post_limit_per_run
+    if platform == "instagram":
+        return settings.instagram_post_limit_per_run
     if platform == "vk":
         return settings.vk_post_limit_per_run
-    raise typer.BadParameter("platform must be 'pinterest' or 'vk'.")
+    raise typer.BadParameter("platform must be 'instagram', 'pinterest', or 'vk'.")
 
 
 def _validate_platform(platform: str) -> None:
     if platform not in PLATFORMS:
-        raise typer.BadParameter("platform must be 'pinterest' or 'vk'.")
+        raise typer.BadParameter("platform must be 'instagram', 'pinterest', or 'vk'.")
 
 
 def _build_social_publisher(
@@ -191,8 +199,14 @@ def _build_social_publisher(
         if zernio and not dry_run:
             return _build_zernio_pinterest_publisher(settings, out_dir)
         return _build_pinterest_publisher(settings, dry_run, out_dir)
+    if platform == "instagram":
+        if browser:
+            raise typer.BadParameter("--browser is only supported for VK publishing.")
+        if zernio and not dry_run:
+            return _build_zernio_instagram_publisher(settings, out_dir)
+        return _build_instagram_publisher(settings, dry_run, out_dir)
     if zernio:
-        raise typer.BadParameter("--zernio is currently supported only for Pinterest publishing.")
+        raise typer.BadParameter("--zernio is currently supported only for Pinterest/Instagram publishing.")
     return _build_vk_publisher(settings, dry_run, out_dir, browser=browser)
 
 
@@ -223,6 +237,37 @@ def _build_zernio_pinterest_publisher(settings: Settings, out_dir: Path):
         settings.zernio_api_key,
         account_id=settings.zernio_pinterest_account_id,
         board_id=settings.zernio_pinterest_board_id,
+        out_dir=out_dir,
+    )
+
+
+def _build_instagram_publisher(settings: Settings, dry_run: bool, out_dir: Path):
+    if dry_run:
+        return InstagramDryRunPublisher(out_dir)
+    if not settings.instagram_enable_real_publish:
+        raise typer.BadParameter(
+            "Real Instagram publishing is disabled. Set INSTAGRAM_ENABLE_REAL_PUBLISH=1 to enable it."
+        )
+    if not settings.instagram_access_token:
+        raise typer.BadParameter("INSTAGRAM_ACCESS_TOKEN is required for direct Instagram publishing.")
+    if not settings.instagram_user_id:
+        raise typer.BadParameter("INSTAGRAM_USER_ID is required for direct Instagram publishing.")
+    return InstagramApiPublisher(settings.instagram_access_token, settings.instagram_user_id)
+
+
+def _build_zernio_instagram_publisher(settings: Settings, out_dir: Path):
+    if not settings.zernio_enable_real_publish:
+        raise typer.BadParameter(
+            "Real Zernio publishing is disabled. Set ZERNIO_ENABLE_REAL_PUBLISH=1 to enable it."
+        )
+    if not settings.zernio_api_key:
+        raise typer.BadParameter("ZERNIO_API_KEY is required for real Zernio publishing.")
+    if not settings.zernio_instagram_account_id:
+        raise typer.BadParameter("ZERNIO_INSTAGRAM_ACCOUNT_ID is required for Zernio Instagram publishing.")
+    return ZernioInstagramPublisher(
+        settings.zernio_api_key,
+        account_id=settings.zernio_instagram_account_id,
+        content_type=settings.zernio_instagram_content_type,
         out_dir=out_dir,
     )
 
@@ -702,6 +747,38 @@ def zernio_check(
         username = account.get("username") or account.get("displayName") or "-"
         is_active = account.get("isActive")
         typer.echo(f"- id={account_id} username={username} active={is_active}")
+
+
+@app.command()
+def instagram_check(
+    db_path: Path | None = typer.Option(None, help="SQLite database path."),
+) -> None:
+    """Validate Instagram settings and locally prepared payloads."""
+    settings = load_settings()
+
+    typer.echo("Instagram local configuration")
+    typer.echo(f"Direct API user ID configured: {bool(settings.instagram_user_id)}")
+    typer.echo(f"Direct API token configured: {bool(settings.instagram_access_token)}")
+    typer.echo(f"Direct real publish enabled: {settings.instagram_enable_real_publish}")
+    typer.echo(f"Zernio API key configured: {bool(settings.zernio_api_key)}")
+    typer.echo(f"Zernio real publish enabled: {settings.zernio_enable_real_publish}")
+    typer.echo(f"Zernio Instagram account ID configured: {settings.zernio_instagram_account_id or '-'}")
+    typer.echo(f"Zernio Instagram content type: {settings.zernio_instagram_content_type}")
+
+    store = Store(db_path or settings.db_path)
+    store.init_db()
+    posts = store.list_posts(platform="instagram")
+    invalid = 0
+    for post in posts:
+        try:
+            validate_instagram_payload(post.payload)
+        except ValueError as exc:
+            invalid += 1
+            typer.echo(f"Invalid Instagram post #{post.id}: {exc}")
+
+    typer.echo(f"Instagram payloads checked: {len(posts)}")
+    if invalid:
+        raise typer.BadParameter(f"{invalid} Instagram payloads are invalid.")
 
 
 @app.command()
@@ -1281,12 +1358,117 @@ def wb_pinterest_cycle(
 def wb_instagram_cycle(
     seller_url: str = typer.Option(..., help="WB seller URL sorted by newness."),
     scan_limit: int = typer.Option(100, help="How many top seller products to scan as newest candidates."),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--no-dry-run",
+        help="Dry-run is the safe default. Use --no-dry-run only for real Instagram publishing.",
+    ),
+    zernio: bool = typer.Option(
+        True,
+        "--zernio/--direct-api",
+        help="Use Zernio for real Instagram publishing. --direct-api uses Instagram Graph API settings.",
+    ),
+    limit: int | None = typer.Option(None, help="Maximum number of Instagram posts to process."),
+    db_path: Path | None = typer.Option(None, help="SQLite database path."),
+    user_data_dir: Path | None = typer.Option(
+        None,
+        help="Persistent WB browser profile directory. Use the same profile as wb-browser-baseline.",
+    ),
+    browser_engine: str = typer.Option(
+        "selenium",
+        help="WB browser engine: selenium or playwright. Selenium uses undetected_chromedriver.",
+    ),
+    output_path: Path | None = typer.Option(None, help="Where to save scanned WB product cards JSON."),
+    state_path: Path | None = typer.Option(None, help="Optional WB browser storage state path."),
+    browser_channel: str | None = typer.Option("chrome", help="Browser channel for Playwright launch."),
+    cdp_url: str | None = typer.Option(None, help="Connect to an already running Chrome via CDP."),
+    chrome_binary: Path | None = typer.Option(None, help="Path to chrome.exe for Selenium/undetected_chromedriver."),
+    chromedriver_path: Path | None = typer.Option(None, help="Explicit chromedriver path for Selenium."),
+    auto_install_driver: bool = typer.Option(
+        True,
+        "--auto-install-driver/--no-auto-install-driver",
+        help="Let chromedriver-autoinstaller install a matching driver when no explicit path is provided.",
+    ),
+    headless: bool = typer.Option(False, help="Run WB browser headless. Visible mode is recommended for WB checks."),
+    manual_ready: bool = typer.Option(
+        False,
+        "--manual-ready/--no-manual-ready",
+        help="Wait for Enter before scanning. Disabled by default.",
+    ),
+    ready_delay_seconds: float = typer.Option(2.0, help="Delay before scanning when --no-manual-ready is used."),
+    max_scrolls: int = typer.Option(80, help="Maximum WB scroll attempts."),
+    idle_scrolls: int = typer.Option(8, help="Stop WB scan after this many scrolls without new nmIDs."),
+    scroll_delay_ms: int = typer.Option(1400, help="Maximum wait for WB products to load after each scroll."),
+    scroll_pixels: int = typer.Option(1800, help="Vertical pixels per WB scroll step."),
+    out_dir: Path | None = typer.Option(None, help="Output directory for dry-run payloads and Zernio artifacts."),
 ) -> None:
-    """Reserved WB -> Instagram cycle command for the next integration stage."""
-    raise typer.BadParameter(
-        "Instagram cycle is not implemented yet. "
-        "Use wb-vk-cycle, wb-pinterest-cycle, or wb-social-cycle with --no-instagram."
+    """Run the regular WB -> Instagram cycle after baseline: scan, plan, publish/dry-run, status."""
+    settings = load_settings()
+    store = Store(db_path or settings.db_path)
+    store.init_db()
+    _ensure_wb_browser_baseline(store)
+
+    resolved_output_path = output_path or settings.out_dir / "wb_browser_new_scan_products.json"
+    resolved_state_path = state_path or settings.out_dir / "wb_browser_state.json"
+
+    typer.echo("Step 1/3: scan WB new products")
+    sync_result = _sync_wb_browser_new_products(
+        settings=settings,
+        store=store,
+        seller_url=seller_url,
+        browser_engine=browser_engine,
+        scan_limit=scan_limit,
+        platform="instagram",
+        board_id=None,
+        vk_owner_id=None,
+        output_path=resolved_output_path,
+        state_path=resolved_state_path,
+        browser_channel=browser_channel,
+        user_data_dir=user_data_dir,
+        cdp_url=cdp_url,
+        chrome_binary=chrome_binary,
+        chromedriver_path=chromedriver_path,
+        auto_install_driver=auto_install_driver,
+        headless=headless,
+        manual_ready=manual_ready,
+        ready_delay_seconds=ready_delay_seconds,
+        max_scrolls=max_scrolls,
+        idle_scrolls=idle_scrolls,
+        scroll_delay_ms=scroll_delay_ms,
+        scroll_pixels=scroll_pixels,
+        plan=True,
     )
+    _print_wb_browser_sync_result(sync_result)
+
+    planned_posts = store.list_posts(platform="instagram", status=PostStatus.PLANNED)
+    if not planned_posts:
+        typer.echo("No new products found. Nothing to publish.")
+        _print_wb_instagram_cycle_summary(
+            store=store,
+            sync_result=sync_result,
+            publish_result={"processed": 0, "published": 0, "failed": 0},
+        )
+        return
+
+    if dry_run:
+        typer.echo("\nStep 2/3: publish Instagram dry-run")
+    elif zernio:
+        typer.echo("\nStep 2/3: publish Instagram real Zernio")
+    else:
+        typer.echo("\nStep 2/3: publish Instagram real direct API")
+
+    publish_result = _publish_platform_after_scan(
+        store=store,
+        settings=settings,
+        platform="instagram",
+        dry_run=dry_run,
+        out_dir=out_dir or settings.out_dir,
+        limit=limit,
+        zernio=zernio,
+    )
+
+    typer.echo("\nStep 3/3: status")
+    _print_wb_instagram_cycle_summary(store=store, sync_result=sync_result, publish_result=publish_result)
 
 
 @app.command()
@@ -1300,7 +1482,7 @@ def wb_social_cycle(
     ),
     vk: bool = typer.Option(True, "--vk/--no-vk", help="Plan and publish VK posts."),
     pinterest: bool = typer.Option(True, "--pinterest/--no-pinterest", help="Plan and publish Pinterest posts."),
-    instagram: bool = typer.Option(False, "--instagram/--no-instagram", help="Reserved for the later Instagram cycle."),
+    instagram: bool = typer.Option(False, "--instagram/--no-instagram", help="Plan and publish Instagram posts."),
     vk_browser: bool = typer.Option(False, "--vk-browser", help="Publish real VK posts through browser automation."),
     pinterest_zernio: bool = typer.Option(
         True,
@@ -1309,6 +1491,7 @@ def wb_social_cycle(
     ),
     vk_limit: int | None = typer.Option(None, help="Maximum number of VK posts to process."),
     pinterest_limit: int | None = typer.Option(None, help="Maximum number of Pinterest posts to process."),
+    instagram_limit: int | None = typer.Option(None, help="Maximum number of Instagram posts to process."),
     board_id: str | None = typer.Option(None, help="Pinterest board ID used for planning."),
     vk_owner_id: str | None = typer.Option(None, help="VK wall owner ID used for planning VK posts."),
     db_path: Path | None = typer.Option(None, help="SQLite database path."),
@@ -1347,9 +1530,6 @@ def wb_social_cycle(
     """Run one WB scan, then post new products sequentially to selected social networks."""
     if not vk and not pinterest and not instagram:
         raise typer.BadParameter("At least one platform must be enabled.")
-    if instagram:
-        raise typer.BadParameter("Instagram cycle is not implemented yet. Run without --instagram for now.")
-
     settings = load_settings()
     store = Store(db_path or settings.db_path)
     store.init_db()
@@ -1417,6 +1597,17 @@ def wb_social_cycle(
             raise typer.BadParameter(str(exc)) from exc
         typer.echo("Pinterest:")
         _print_plan_result(plan_results["pinterest"])
+    if instagram:
+        try:
+            plan_results["instagram"] = _plan_platform_posts(
+                store,
+                settings,
+                platform="instagram",
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo("Instagram:")
+        _print_plan_result(plan_results["instagram"])
 
     typer.echo("\nStep 3/4: publish social posts")
     publish_results: dict[str, dict[str, int]] = {}
@@ -1448,6 +1639,17 @@ def wb_social_cycle(
             limit=pinterest_limit,
             board_id=planning_board_id,
             zernio=pinterest_zernio,
+        )
+    if instagram:
+        typer.echo("Instagram dry-run" if dry_run else "Instagram real Zernio")
+        publish_results["instagram"] = _publish_platform_after_scan(
+            store=store,
+            settings=settings,
+            platform="instagram",
+            dry_run=dry_run,
+            out_dir=resolved_out_dir,
+            limit=instagram_limit,
+            zernio=True,
         )
 
     typer.echo("\nStep 4/4: status")
@@ -1487,6 +1689,24 @@ def _print_wb_pinterest_cycle_summary(
     plan_result = sync_result.get("plan_result") or {}
     summary = store.summary()
     typer.echo("WB -> Pinterest cycle summary")
+    typer.echo(f"Scanned products: {seen_result['total']}")
+    typer.echo(f"New nmIDs found: {seen_result['created']}")
+    typer.echo(f"Planned posts created: {plan_result.get('planned', 0)}")
+    typer.echo(f"Published / dry-run published: {publish_result['published']}")
+    typer.echo(f"Failed: {publish_result['failed']}")
+    typer.echo(f"Posts by status: {summary['posts_by_status']}")
+
+
+def _print_wb_instagram_cycle_summary(
+    *,
+    store: Store,
+    sync_result: dict[str, object],
+    publish_result: dict[str, int],
+) -> None:
+    seen_result = sync_result["seen_result"]
+    plan_result = sync_result.get("plan_result") or {}
+    summary = store.summary()
+    typer.echo("WB -> Instagram cycle summary")
     typer.echo(f"Scanned products: {seen_result['total']}")
     typer.echo(f"New nmIDs found: {seen_result['created']}")
     typer.echo(f"Planned posts created: {plan_result.get('planned', 0)}")
@@ -1611,7 +1831,7 @@ def baseline_sync(
 
 @app.command()
 def plan_posts(
-    platform: str = typer.Option("pinterest", help="Target platform: pinterest or vk."),
+    platform: str = typer.Option("pinterest", help="Target platform: instagram, pinterest, or vk."),
     board_id: str | None = typer.Option(None, help="Pinterest board ID."),
     vk_owner_id: str | None = typer.Option(None, help="VK wall owner ID, e.g. -123456 for a group."),
     only_after_baseline: bool = typer.Option(
@@ -1644,7 +1864,7 @@ def plan_posts(
 
 @app.command()
 def retry_failed(
-    platform: str = typer.Option("pinterest", help="Target platform: pinterest or vk."),
+    platform: str = typer.Option("pinterest", help="Target platform: instagram, pinterest, or vk."),
     board_id: str | None = typer.Option(None, help="Pinterest board ID."),
     vk_owner_id: str | None = typer.Option(None, help="VK wall owner ID, e.g. -123456 for a group."),
     db_path: Path | None = typer.Option(None, help="SQLite database path."),
@@ -1673,7 +1893,7 @@ def retry_failed(
 @app.command()
 def recover_publishing(
     action: str = typer.Option("fail", help="Recovery action: fail or retry."),
-    platform: str = typer.Option("pinterest", help="Target platform: pinterest or vk."),
+    platform: str = typer.Option("pinterest", help="Target platform: instagram, pinterest, or vk."),
     board_id: str | None = typer.Option(None, help="Pinterest board ID used when action=retry."),
     vk_owner_id: str | None = typer.Option(None, help="VK wall owner ID used when action=retry."),
     db_path: Path | None = typer.Option(None, help="SQLite database path."),
@@ -1705,9 +1925,9 @@ def recover_publishing(
 @app.command()
 def publish(
     dry_run: bool = typer.Option(True, help="Write social payloads to out/ instead of calling API."),
-    platform: str = typer.Option("pinterest", help="Target platform: pinterest or vk."),
+    platform: str = typer.Option("pinterest", help="Target platform: instagram, pinterest, or vk."),
     browser: bool = typer.Option(False, "--browser", help="Publish VK posts through a logged-in browser session."),
-    zernio: bool = typer.Option(False, "--zernio", help="Publish Pinterest posts through Zernio."),
+    zernio: bool = typer.Option(False, "--zernio", help="Publish Pinterest/Instagram posts through Zernio."),
     limit: int | None = typer.Option(None, help="Maximum number of planned posts to process."),
     retry_failed: bool = typer.Option(
         True,
@@ -1751,7 +1971,7 @@ def publish(
 @app.command()
 def report(
     db_path: Path | None = typer.Option(None, help="SQLite database path."),
-    platform: str | None = typer.Option("pinterest", help="Platform filter: pinterest, vk, or empty for all."),
+    platform: str | None = typer.Option("pinterest", help="Platform filter: instagram, pinterest, vk, or empty for all."),
 ) -> None:
     """Print product/post status."""
     settings = load_settings()
@@ -1835,7 +2055,7 @@ def vk_real_cycle(
 def run_cycle(
     mode: str | None = typer.Option(None, help="Run mode: test or real-ready."),
     source: str | None = typer.Option(None, help="Manual source override: fake or wb-api."),
-    platform: str = typer.Option("pinterest", help="Target platform: pinterest or vk."),
+    platform: str = typer.Option("pinterest", help="Target platform: instagram, pinterest, or vk."),
     board_id: str | None = typer.Option(None, help="Pinterest board ID."),
     vk_owner_id: str | None = typer.Option(None, help="VK wall owner ID, e.g. -123456 for a group."),
     include_current: bool = typer.Option(

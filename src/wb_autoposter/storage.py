@@ -629,6 +629,30 @@ def build_vk_payload(
     }
 
 
+def build_instagram_payload(
+    product: Product,
+    content: GeneratedContent | None = None,
+    *,
+    tracking_params: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    if not is_publishable(product):
+        raise ValueError(f"Product {product.nm_id} is not publishable.")
+
+    generated_content = content or TemplateContentGenerator().generate(product)
+    link = build_tracked_link(product.url.strip(), product.nm_id, tracking_params)
+    caption = _build_instagram_caption(generated_content, link)
+
+    return {
+        "product_nm_id": product.nm_id,
+        "generated_content": generated_content.to_dict(),
+        "instagram": {
+            "image_url": product.photos[0].strip(),
+            "caption": caption,
+            "link": link,
+        },
+    }
+
+
 def build_social_payload(
     platform: str,
     product: Product,
@@ -655,10 +679,17 @@ def build_social_payload(
             upload_photo=vk_upload_photo,
             tracking_params=tracking_params,
         )
+    if platform == "instagram":
+        return build_instagram_payload(product, content, tracking_params=tracking_params)
     raise ValueError(f"Unsupported platform: {platform}")
 
 
 def _build_vk_message(_product: Product, content: GeneratedContent, link: str) -> str:
+    parts = [content.description, f"Ссылка на Вайлдберриз: {link}"]
+    return "\n\n".join(part for part in parts if part.strip())
+
+
+def _build_instagram_caption(content: GeneratedContent, link: str) -> str:
     parts = [content.description, f"Ссылка на Вайлдберриз: {link}"]
     return "\n\n".join(part for part in parts if part.strip())
 

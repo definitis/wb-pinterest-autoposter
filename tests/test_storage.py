@@ -11,6 +11,7 @@ from wb_autoposter.models import PostStatus
 from wb_autoposter.storage import (
     PostRecord,
     Store,
+    build_instagram_payload,
     build_pinterest_payload,
     build_tracked_link,
     build_vk_payload,
@@ -174,6 +175,22 @@ def test_build_vk_payload_uses_text_link_photo_and_tracking_params() -> None:
     assert vk_payload["attachments"] == [vk_payload["link"]]
 
 
+def test_build_instagram_payload_uses_caption_link_and_photo() -> None:
+    product = make_product(
+        nm_id=123,
+        title="Шапка женская вязаная",
+        description="Теплая шапка с отворотом для прохладной погоды.",
+        url="https://www.wildberries.ru/catalog/123/detail.aspx",
+    )
+
+    payload = build_instagram_payload(product)
+
+    instagram_payload = payload["instagram"]
+    assert instagram_payload["image_url"] == product.photos[0]
+    assert "Теплая шапка" in instagram_payload["caption"]
+    assert product.url in instagram_payload["caption"]
+
+
 def test_build_vk_payload_without_photo_upload_keeps_link_only_in_message() -> None:
     product = make_product(nm_id=123, url="https://www.wildberries.ru/catalog/123/detail.aspx")
 
@@ -194,6 +211,18 @@ def test_plan_posts_can_create_vk_posts(store: Store) -> None:
     post = store.list_posts(platform="vk", status=PostStatus.PLANNED)[0]
     assert post.payload["vk"]["owner_id"] == "-100"
     assert post.payload["vk"]["image_url"] == product.photos[0]
+
+
+def test_plan_posts_can_create_instagram_posts(store: Store) -> None:
+    product = make_product(title="Шапка женская вязаная", description="Теплая шапка с отворотом.")
+    store.upsert_products([product])
+
+    result = store.plan_posts(platform="instagram")
+
+    assert result == {"planned": 1, "skipped_existing": 0, "skipped_ineligible": 0}
+    post = store.list_posts(platform="instagram", status=PostStatus.PLANNED)[0]
+    assert post.payload["instagram"]["image_url"] == product.photos[0]
+    assert "Вайлдберриз" in post.payload["instagram"]["caption"]
 
 
 def test_build_tracked_link_keeps_original_link_without_tracking_params() -> None:

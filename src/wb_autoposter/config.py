@@ -57,6 +57,8 @@ class Settings:
     vk_post_limit_per_run: int | None
     instagram_access_token: str | None
     instagram_user_id: str | None
+    instagram_enable_real_publish: bool
+    instagram_post_limit_per_run: int | None
     zernio_api_key: str | None
     zernio_enable_real_publish: bool
     zernio_pinterest_account_id: str | None
@@ -125,6 +127,8 @@ def load_settings() -> Settings:
         vk_post_limit_per_run=_parse_optional_positive_int(os.getenv("VK_POST_LIMIT_PER_RUN")),
         instagram_access_token=os.getenv("INSTAGRAM_ACCESS_TOKEN") or None,
         instagram_user_id=os.getenv("INSTAGRAM_USER_ID") or None,
+        instagram_enable_real_publish=_parse_bool(os.getenv("INSTAGRAM_ENABLE_REAL_PUBLISH"), default=False),
+        instagram_post_limit_per_run=_parse_optional_positive_int(os.getenv("INSTAGRAM_POST_LIMIT_PER_RUN")),
         zernio_api_key=os.getenv("ZERNIO_API_KEY") or None,
         zernio_enable_real_publish=_parse_bool(os.getenv("ZERNIO_ENABLE_REAL_PUBLISH"), default=False),
         zernio_pinterest_account_id=os.getenv("ZERNIO_PINTEREST_ACCOUNT_ID") or None,

@@ -242,14 +242,14 @@ def test_publish_cli_blocks_unknown_platform(tmp_path: Path) -> None:
     result = CliRunner().invoke(app, ["publish", "--platform", "telegram", "--db-path", str(tmp_path / "app.sqlite3")])
 
     assert result.exit_code != 0
-    assert "platform must be 'pinterest' or 'vk'" in result.output
+    assert "platform must be 'instagram', 'pinterest', or 'vk'" in result.output
 
 
 def test_plan_posts_cli_blocks_unknown_platform(tmp_path: Path) -> None:
     result = CliRunner().invoke(app, ["plan-posts", "--platform", "telegram", "--db-path", str(tmp_path / "app.sqlite3")])
 
     assert result.exit_code != 0
-    assert "platform must be 'pinterest' or 'vk'" in result.output
+    assert "platform must be 'instagram', 'pinterest', or 'vk'" in result.output
 
 
 def test_non_dry_run_publish_is_blocked_without_mutating_posts(tmp_path: Path, fixture_path: Path) -> None:
@@ -330,6 +330,64 @@ def test_publish_cli_can_use_zernio_pinterest_publisher(
     published_posts = store.list_posts(platform="pinterest", status=PostStatus.PUBLISHED)
     assert len(published_posts) == 1
     assert published_posts[0].external_id == "zernio-1"
+
+
+def test_zernio_instagram_publish_is_blocked_without_safety_flag(
+    tmp_path: Path,
+    fixture_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ZERNIO_API_KEY", "token")
+    monkeypatch.setenv("ZERNIO_INSTAGRAM_ACCOUNT_ID", "ig-1")
+    monkeypatch.setenv("ZERNIO_ENABLE_REAL_PUBLISH", "0")
+    db_path = tmp_path / "app.sqlite3"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_products(FakeWBSource(fixture_path).fetch_products())
+    store.plan_posts(platform="instagram")
+
+    result = CliRunner().invoke(
+        app,
+        ["publish", "--platform", "instagram", "--zernio", "--no-dry-run", "--db-path", str(db_path)],
+    )
+
+    assert result.exit_code != 0
+    assert "Real Zernio publishing is disabled" in result.output
+    assert len(store.list_posts(platform="instagram", status=PostStatus.PLANNED)) == 4
+
+
+def test_publish_cli_can_use_zernio_instagram_publisher(
+    tmp_path: Path,
+    fixture_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeZernioInstagramPublisher:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+        def publish(self, post_id: int, payload: dict[str, object]):
+            return PublishResult(status=PostStatus.PUBLISHED, external_id=f"zernio-ig-{post_id}")
+
+    monkeypatch.setattr(cli_module, "ZernioInstagramPublisher", FakeZernioInstagramPublisher)
+    monkeypatch.setenv("ZERNIO_API_KEY", "token")
+    monkeypatch.setenv("ZERNIO_INSTAGRAM_ACCOUNT_ID", "ig-1")
+    monkeypatch.setenv("ZERNIO_ENABLE_REAL_PUBLISH", "1")
+    db_path = tmp_path / "app.sqlite3"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_products([FakeWBSource(fixture_path).fetch_products()[0]])
+    store.plan_posts(platform="instagram")
+
+    result = CliRunner().invoke(
+        app,
+        ["publish", "--platform", "instagram", "--zernio", "--no-dry-run", "--db-path", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    published_posts = store.list_posts(platform="instagram", status=PostStatus.PUBLISHED)
+    assert len(published_posts) == 1
+    assert published_posts[0].external_id == "zernio-ig-1"
 
 
 def test_failed_publish_does_not_leave_post_planned(tmp_path: Path, fixture_path: Path, monkeypatch) -> None:
@@ -1061,37 +1119,165 @@ def test_wb_social_cycle_scans_once_and_publishes_vk_and_pinterest_dry_run(
     assert len(list(out_dir.glob("pinterest_pin_*.json"))) == 1
 
 
-def test_wb_instagram_cycle_is_reserved_for_later(tmp_path: Path) -> None:
-    result = CliRunner().invoke(
-        app,
-        [
-            "wb-instagram-cycle",
-            "--seller-url",
-            "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1",
-            "--scan-limit",
-            "1",
-        ],
-    )
+def test_wb_social_cycle_can_include_instagram_dry_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeResult:
+        nm_ids = [1002, 1001]
+        products = [
+            make_product(
+                nm_id=1002,
+                title="Шапка женская вязаная",
+                description="Теплая шапка с отворотом для прохладной погоды.",
+                price=1490,
+                stock=1,
+            ),
+            make_product(nm_id=1001, title="Old browser product", price=990, stock=1),
+        ]
+        output_path = tmp_path / "scan.json"
+        iterations = 3
 
-    assert result.exit_code != 0
-    assert "Instagram cycle is not implemented yet" in result.output
+    monkeypatch.setattr(cli_module, "collect_wb_seller_product_cards", lambda **kwargs: FakeResult())
+    db_path = tmp_path / "app.sqlite3"
+    out_dir = tmp_path / "out"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_seen_nm_ids([1001], source="wb-browser", mark_baseline=True)
 
-
-def test_wb_social_cycle_rejects_instagram_until_implemented(tmp_path: Path) -> None:
     result = CliRunner().invoke(
         app,
         [
             "wb-social-cycle",
             "--seller-url",
             "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1",
-            "--instagram",
             "--db-path",
-            str(tmp_path / "app.sqlite3"),
+            str(db_path),
+            "--out-dir",
+            str(out_dir),
+            "--instagram",
+            "--no-vk",
+            "--no-pinterest",
+            "--dry-run",
         ],
     )
 
-    assert result.exit_code != 0
-    assert "Instagram cycle is not implemented yet" in result.output
+    store = Store(db_path)
+    assert result.exit_code == 0
+    assert "Instagram:" in result.output
+    assert "Instagram dry-run" in result.output
+    assert "instagram: planned=1 published=1 failed=0" in result.output
+    assert len(store.list_posts(platform="instagram", status=PostStatus.DRY_RUN_PUBLISHED)) == 1
+    assert len(list(out_dir.glob("instagram_post_*.json"))) == 1
+
+
+def test_wb_instagram_cycle_dry_run_plans_and_publishes_new_products(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeResult:
+        nm_ids = [1002, 1001]
+        products = [
+            make_product(
+                nm_id=1002,
+                title="Шапка женская вязаная",
+                description="Теплая шапка с отворотом для прохладной погоды.",
+                price=1490,
+                stock=1,
+            ),
+            make_product(nm_id=1001, title="Old browser product", price=990, stock=1),
+        ]
+        output_path = tmp_path / "scan.json"
+        iterations = 3
+
+    monkeypatch.setattr(cli_module, "collect_wb_seller_product_cards", lambda **kwargs: FakeResult())
+    db_path = tmp_path / "app.sqlite3"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_seen_nm_ids([1001], source="wb-browser", mark_baseline=True)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "wb-instagram-cycle",
+            "--seller-url",
+            "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1",
+            "--db-path",
+            str(db_path),
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--dry-run",
+        ],
+    )
+
+    store = Store(db_path)
+    posts = store.list_posts(platform="instagram", status=PostStatus.DRY_RUN_PUBLISHED)
+    assert result.exit_code == 0
+    assert "Step 2/3: publish Instagram dry-run" in result.output
+    assert "Processed 1 planned posts: 1 ok, 0 failed." in result.output
+    assert len(posts) == 1
+    assert "Теплая шапка" in posts[0].payload["instagram"]["caption"]
+    assert len(list((tmp_path / "out").glob("instagram_post_*.json"))) == 1
+
+
+def test_wb_instagram_cycle_real_publish_can_use_zernio(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeResult:
+        nm_ids = [1002, 1001]
+        products = [
+            make_product(
+                nm_id=1002,
+                title="Шапка женская вязаная",
+                description="Теплая шапка с отворотом для прохладной погоды.",
+                price=1490,
+                stock=1,
+            ),
+            make_product(nm_id=1001, title="Old browser product", price=990, stock=1),
+        ]
+        output_path = tmp_path / "scan.json"
+        iterations = 3
+
+    class FakeZernioInstagramPublisher:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+        def publish(self, post_id: int, payload: dict[str, object]):
+            return PublishResult(status=PostStatus.PUBLISHED, external_id=f"zernio-ig-{post_id}")
+
+    monkeypatch.setattr(cli_module, "collect_wb_seller_product_cards", lambda **kwargs: FakeResult())
+    monkeypatch.setattr(cli_module, "ZernioInstagramPublisher", FakeZernioInstagramPublisher)
+    monkeypatch.setenv("ZERNIO_API_KEY", "token")
+    monkeypatch.setenv("ZERNIO_ENABLE_REAL_PUBLISH", "1")
+    monkeypatch.setenv("ZERNIO_INSTAGRAM_ACCOUNT_ID", "ig-1")
+    monkeypatch.setenv("ZERNIO_INSTAGRAM_CONTENT_TYPE", "feed")
+    db_path = tmp_path / "app.sqlite3"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_seen_nm_ids([1001], source="wb-browser", mark_baseline=True)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "wb-instagram-cycle",
+            "--seller-url",
+            "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1",
+            "--db-path",
+            str(db_path),
+            "--no-dry-run",
+            "--limit",
+            "1",
+        ],
+    )
+
+    posts = Store(db_path).list_posts(platform="instagram", status=PostStatus.PUBLISHED)
+    assert result.exit_code == 0
+    assert "Step 2/3: publish Instagram real Zernio" in result.output
+    assert "Processed 1 planned posts: 1 ok, 0 failed." in result.output
+    assert len(posts) == 1
+    assert posts[0].external_id == "zernio-ig-1"
 
 
 def test_wb_vk_cycle_real_publish_requires_browser(tmp_path: Path, monkeypatch) -> None:

@@ -10,9 +10,9 @@ from wb_autoposter.models import PostStatus
 from wb_autoposter.publishers.pinterest import PinterestDryRunPublisher
 from wb_autoposter.publishers.pinterest import PinterestApiPublisher
 from wb_autoposter.publishers.pinterest import validate_pinterest_payload
-from wb_autoposter.publishers.zernio import ZernioPinterestPublisher, ZernioPublisher
-from wb_autoposter.publishers.zernio import build_zernio_pinterest_post
-from wb_autoposter.storage import build_pinterest_payload
+from wb_autoposter.publishers.zernio import ZernioInstagramPublisher, ZernioPinterestPublisher, ZernioPublisher
+from wb_autoposter.publishers.zernio import build_zernio_instagram_post, build_zernio_pinterest_post
+from wb_autoposter.storage import build_instagram_payload, build_pinterest_payload
 
 from helpers import make_product
 
@@ -148,6 +148,25 @@ def test_build_zernio_pinterest_post_maps_existing_pinterest_payload() -> None:
     assert zernio_payload["metadata"]["productNmId"] == product.nm_id
 
 
+def test_build_zernio_instagram_post_maps_existing_instagram_payload() -> None:
+    product = make_product(title="Шапка женская вязаная", description="Теплая шапка с отворотом.")
+    payload = build_instagram_payload(product)
+
+    zernio_payload = build_zernio_instagram_post(payload, account_id="ig-1", content_type="feed")
+
+    assert zernio_payload["content"] == payload["instagram"]["caption"]
+    assert zernio_payload["mediaItems"] == [{"type": "image", "url": product.photos[0]}]
+    assert zernio_payload["platforms"] == [
+        {
+            "platform": "instagram",
+            "accountId": "ig-1",
+            "platformSpecificData": {"contentType": "feed"},
+        }
+    ]
+    assert zernio_payload["publishNow"] is True
+    assert zernio_payload["metadata"]["productNmId"] == product.nm_id
+
+
 def test_zernio_pinterest_publisher_posts_to_zernio(tmp_path: Path) -> None:
     requests: list[httpx.Request] = []
 
@@ -184,6 +203,38 @@ def test_zernio_pinterest_publisher_posts_to_zernio(tmp_path: Path) -> None:
     assert request_json["content"] == "Шапка с отворотом. Цена: 1 000 руб."
     assert request_json["platforms"][0]["platform"] == "pinterest"
     assert request_json["platforms"][0]["accountId"] == "acc-1"
+
+
+def test_zernio_instagram_publisher_posts_to_zernio(tmp_path: Path) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201, json={"post": {"_id": "zi-123", "status": "publishing"}})
+
+    client = httpx.Client(
+        base_url=ZernioPublisher.base_url,
+        transport=httpx.MockTransport(handler),
+    )
+    payload = build_instagram_payload(make_product(title="Шапка женская вязаная"))
+
+    result = ZernioInstagramPublisher(
+        "token",
+        account_id="ig-1",
+        content_type="feed",
+        out_dir=tmp_path,
+        client=client,
+    ).publish(7, payload)
+
+    assert result.status == PostStatus.PUBLISHED
+    assert result.external_id == "zi-123"
+    assert requests[0].url.path == "/api/v1/posts"
+    assert requests[0].headers["Authorization"] == "Bearer token"
+    assert requests[0].headers["Content-Type"] == "application/json; charset=utf-8"
+    assert "Вайлдберриз".encode("utf-8") in requests[0].content
+    request_json = json.loads(requests[0].content)
+    assert request_json["platforms"][0]["platform"] == "instagram"
+    assert request_json["platforms"][0]["accountId"] == "ig-1"
 
 
 def test_zernio_publisher_lists_accounts() -> None:
