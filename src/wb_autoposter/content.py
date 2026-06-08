@@ -62,7 +62,7 @@ def _build_description(
     title_sentence = _sentence(title)
     brand_part = _brand_phrase(brand)
     fact_sentence = _sentence(fact) if fact else ""
-    price_sentence = f"Цена: {price}." if price else ""
+    price_sentence = f"Цена: {price.rstrip('.')}." if price else ""
 
     if variant == 0:
         parts = [title_sentence, fact_sentence, price_sentence, cta + "."]
@@ -209,7 +209,7 @@ def _mostly_latin(value: str) -> bool:
 def _build_hashtags(brand: str, text: str) -> list[str]:
     tags = ["#Wildberries", "#ВБНовинки"]
     brand_tag = _hashtag(brand)
-    if brand_tag:
+    if brand_tag and brand_tag.lower() not in {tag.lower() for tag in tags}:
         tags.insert(0, brand_tag)
 
     category_tag = _category_hashtag(text)

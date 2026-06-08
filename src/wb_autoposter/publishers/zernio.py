@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import uuid
+from io import BytesIO
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
+from PIL import Image
 
 from wb_autoposter.models import PostStatus, PublishResult
 from wb_autoposter.publishers.instagram import validate_instagram_payload
@@ -25,12 +28,14 @@ class ZernioPublisher:
         *,
         out_dir: Path | None = None,
         client: httpx.Client | None = None,
+        download_client: httpx.Client | None = None,
     ) -> None:
         if not api_key.strip():
             raise ValueError("Zernio API key is required.")
         self.api_key = api_key
         self.out_dir = out_dir
         self.client = client or httpx.Client(base_url=self.base_url, timeout=30)
+        self.download_client = download_client or httpx.Client(timeout=30)
 
     def publish_pinterest(
         self,
@@ -41,14 +46,7 @@ class ZernioPublisher:
         board_id: str,
     ) -> PublishResult:
         request_body = build_zernio_pinterest_post(payload, account_id=account_id, board_id=board_id)
-        request_json = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
-        response = self.client.post(
-            "/posts",
-            headers={**self._headers(), "x-request-id": _request_id("pinterest", post_id, request_body)},
-            content=request_json,
-        )
-        response.raise_for_status()
-        body = response.json()
+        body = self._post_with_utf8("pinterest", post_id, request_body)
         zernio_post_id = _extract_post_id(body)
 
         payload_path = self._write_artifact(
@@ -68,6 +66,7 @@ class ZernioPublisher:
         content_type: str,
     ) -> PublishResult:
         request_body = build_zernio_instagram_post(payload, account_id=account_id, content_type=content_type)
+        self._prepare_instagram_media(request_body, post_id=post_id, nm_id=payload.get("product_nm_id"))
         body = self._post_with_utf8("instagram", post_id, request_body)
         zernio_post_id = _extract_post_id(body)
 
@@ -103,8 +102,56 @@ class ZernioPublisher:
             headers={**self._headers(), "x-request-id": _request_id(platform, post_id, request_body)},
             content=request_json,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise ValueError(f"Zernio API error {response.status_code}: {_short_response_text(response)}")
         return response.json()
+
+    def _prepare_instagram_media(self, request_body: dict[str, Any], *, post_id: int, nm_id: object) -> None:
+        media_items = request_body.get("mediaItems")
+        if not isinstance(media_items, list):
+            return
+        for index, media_item in enumerate(media_items, start=1):
+            if not isinstance(media_item, dict) or media_item.get("type") != "image":
+                continue
+            image_url = str(media_item.get("url") or "").strip()
+            if _is_instagram_supported_image_url(image_url):
+                continue
+            media_item["url"] = self._upload_jpeg_media(image_url, post_id=post_id, nm_id=nm_id, index=index)
+
+    def _upload_jpeg_media(self, image_url: str, *, post_id: int, nm_id: object, index: int) -> str:
+        image_response = self.download_client.get(image_url)
+        image_response.raise_for_status()
+        jpeg_bytes = _image_response_to_jpeg(image_response)
+        filename = f"wb_{nm_id or 'unknown'}_{post_id}_{index}.jpg"
+
+        presign_response = self.client.post(
+            "/media/presign",
+            headers=self._headers(),
+            content=json.dumps(
+                {
+                    "filename": filename,
+                    "contentType": "image/jpeg",
+                    "size": len(jpeg_bytes),
+                },
+                ensure_ascii=False,
+            ).encode("utf-8"),
+        )
+        if presign_response.status_code >= 400:
+            raise ValueError(f"Zernio media presign error {presign_response.status_code}: {_short_response_text(presign_response)}")
+        presign_body = presign_response.json()
+        upload_url = str(presign_body.get("uploadUrl") or "")
+        public_url = str(presign_body.get("publicUrl") or "")
+        if not upload_url or not public_url:
+            raise ValueError("Zernio media presign response does not include uploadUrl/publicUrl.")
+
+        upload_response = self.client.put(
+            upload_url,
+            headers={"Content-Type": "image/jpeg"},
+            content=jpeg_bytes,
+        )
+        if upload_response.status_code >= 400:
+            raise ValueError(f"Zernio media upload error {upload_response.status_code}: {_short_response_text(upload_response)}")
+        return public_url
 
     def _write_artifact(
         self,
@@ -148,6 +195,7 @@ class ZernioPinterestPublisher:
         board_id: str,
         out_dir: Path | None = None,
         client: httpx.Client | None = None,
+        download_client: httpx.Client | None = None,
     ) -> None:
         if not account_id.strip():
             raise ValueError("Zernio Pinterest account_id is required.")
@@ -155,7 +203,7 @@ class ZernioPinterestPublisher:
             raise ValueError("Zernio Pinterest board_id is required.")
         self.account_id = account_id.strip()
         self.board_id = board_id.strip()
-        self.publisher = ZernioPublisher(api_key, out_dir=out_dir, client=client)
+        self.publisher = ZernioPublisher(api_key, out_dir=out_dir, client=client, download_client=download_client)
 
     def publish(self, post_id: int, payload: dict[str, Any]) -> PublishResult:
         return self.publisher.publish_pinterest(
@@ -177,6 +225,7 @@ class ZernioInstagramPublisher:
         content_type: str = "feed",
         out_dir: Path | None = None,
         client: httpx.Client | None = None,
+        download_client: httpx.Client | None = None,
     ) -> None:
         if not account_id.strip():
             raise ValueError("Zernio Instagram account_id is required.")
@@ -184,7 +233,7 @@ class ZernioInstagramPublisher:
             raise ValueError("Zernio Instagram content_type is required.")
         self.account_id = account_id.strip()
         self.content_type = content_type.strip()
-        self.publisher = ZernioPublisher(api_key, out_dir=out_dir, client=client)
+        self.publisher = ZernioPublisher(api_key, out_dir=out_dir, client=client, download_client=download_client)
 
     def publish(self, post_id: int, payload: dict[str, Any]) -> PublishResult:
         return self.publisher.publish_instagram(
@@ -287,3 +336,28 @@ def _extract_post_id(body: dict[str, Any]) -> str:
 def _request_id(platform: str, post_id: int, request_body: dict[str, Any]) -> str:
     body_hash = sha256(json.dumps(request_body, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"wb-autoposter:zernio:{platform}:{post_id}:{body_hash}"))
+
+
+def _short_response_text(response: httpx.Response, *, limit: int = 600) -> str:
+    text = response.text.strip()
+    if not text:
+        return "<empty response>"
+    return text[:limit]
+
+
+def _is_instagram_supported_image_url(image_url: str) -> bool:
+    suffix = Path(urlparse(image_url).path).suffix.lower()
+    return suffix in {".jpg", ".jpeg", ".png"}
+
+
+def _image_response_to_jpeg(response: httpx.Response) -> bytes:
+    with Image.open(BytesIO(response.content)) as image:
+        if image.mode in {"RGBA", "LA"}:
+            background = Image.new("RGB", image.size, "white")
+            background.paste(image, mask=image.getchannel("A"))
+            image = background
+        elif image.mode != "RGB":
+            image = image.convert("RGB")
+        output = BytesIO()
+        image.save(output, format="JPEG", quality=92, optimize=True)
+        return output.getvalue()

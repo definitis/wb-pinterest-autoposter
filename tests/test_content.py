@@ -53,3 +53,19 @@ def test_content_generator_localizes_known_english_title() -> None:
     assert "Open on Wildberries" not in content.description
     assert "Цена: 1 680 руб." in content.description
     assert "#Свитер" in content.hashtags
+
+
+def test_content_generator_does_not_duplicate_wildberries_tag_or_price_dot() -> None:
+    product = make_product(
+        nm_id=1004,
+        brand="Wildberries",
+        title="Пиджак джинсовый свободный",
+        description="Плотный джинсовый пиджак свободного кроя.",
+        price=5895,
+    )
+
+    content = TemplateContentGenerator().generate(product)
+
+    assert content.hashtags.count("#Wildberries") == 1
+    assert "руб.." not in content.description
+    assert "Цена: 5 895 руб." in content.description

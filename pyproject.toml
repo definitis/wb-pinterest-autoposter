@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "chromedriver-autoinstaller>=0.6,<1",
     "httpx>=0.27,<1",
+    "pillow>=10,<12",
     "playwright>=1.44,<2",
     "pydantic>=2.6,<3",
     "python-dotenv>=1.0,<2",

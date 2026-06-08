@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from pathlib import Path
 
 import httpx
 import pytest
+from PIL import Image
 
 from wb_autoposter.models import PostStatus
 from wb_autoposter.publishers.pinterest import PinterestDryRunPublisher
@@ -235,6 +237,50 @@ def test_zernio_instagram_publisher_posts_to_zernio(tmp_path: Path) -> None:
     request_json = json.loads(requests[0].content)
     assert request_json["platforms"][0]["platform"] == "instagram"
     assert request_json["platforms"][0]["accountId"] == "ig-1"
+
+
+def test_zernio_instagram_publisher_uploads_webp_as_jpeg(tmp_path: Path) -> None:
+    requests: list[httpx.Request] = []
+
+    def api_handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/v1/media/presign":
+            return httpx.Response(
+                200,
+                json={
+                    "uploadUrl": "https://upload.zernio.test/wb.jpg",
+                    "publicUrl": "https://media.zernio.test/wb.jpg",
+                },
+            )
+        if request.url.host == "upload.zernio.test":
+            return httpx.Response(200)
+        return httpx.Response(201, json={"post": {"_id": "zi-123", "status": "publishing"}})
+
+    image = Image.new("RGB", (8, 8), "white")
+    image_bytes = BytesIO()
+    image.save(image_bytes, format="WEBP")
+    download_client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=image_bytes.getvalue()))
+    )
+    client = httpx.Client(base_url=ZernioPublisher.base_url, transport=httpx.MockTransport(api_handler))
+    payload = build_instagram_payload(make_product(photo="https://basket.example/photo.webp"))
+
+    result = ZernioInstagramPublisher(
+        "token",
+        account_id="ig-1",
+        content_type="feed",
+        out_dir=tmp_path,
+        client=client,
+        download_client=download_client,
+    ).publish(7, payload)
+
+    assert result.status == PostStatus.PUBLISHED
+    assert [request.url.path for request in requests] == ["/api/v1/media/presign", "/wb.jpg", "/api/v1/posts"]
+    upload_request = requests[1]
+    assert upload_request.headers["Content-Type"] == "image/jpeg"
+    assert upload_request.content.startswith(b"\xff\xd8")
+    request_json = json.loads(requests[2].content)
+    assert request_json["mediaItems"] == [{"type": "image", "url": "https://media.zernio.test/wb.jpg"}]
 
 
 def test_zernio_publisher_lists_accounts() -> None:
