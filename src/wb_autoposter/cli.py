@@ -316,6 +316,59 @@ def _publish_planned_posts(store: Store, publisher, platform: str, limit: int | 
     return {"processed": len(posts), "published": published, "failed": failed}
 
 
+def _publish_platform_after_scan(
+    *,
+    store: Store,
+    settings: Settings,
+    platform: str,
+    dry_run: bool,
+    limit: int | None,
+    out_dir: Path,
+    board_id: str | None = None,
+    vk_owner_id: str | None = None,
+    browser: bool = False,
+    zernio: bool = False,
+) -> dict[str, int]:
+    retry_result = _retry_failed_for_publish(
+        store,
+        settings,
+        platform=platform,
+        board_id=board_id,
+        vk_owner_id=vk_owner_id,
+    )
+    if retry_result["retried"] or retry_result["skipped_ineligible"] or retry_result["skipped_missing_product"]:
+        typer.echo(
+            f"Auto-retried {retry_result['retried']} failed {platform} posts. "
+            f"Skipped ineligible: {retry_result['skipped_ineligible']}. "
+            f"Skipped missing products: {retry_result['skipped_missing_product']}."
+        )
+
+    planned_posts = store.list_posts(platform=platform, status=PostStatus.PLANNED)
+    if not planned_posts:
+        typer.echo(f"No planned {platform} posts. Nothing to publish.")
+        return {"processed": 0, "published": 0, "failed": 0}
+
+    publisher = _build_social_publisher(
+        settings,
+        platform,
+        dry_run=dry_run,
+        out_dir=out_dir,
+        browser=browser,
+        zernio=zernio,
+    )
+    result = _publish_planned_posts(
+        store,
+        publisher,
+        platform,
+        limit=_publish_limit(settings, platform, limit),
+    )
+    typer.echo(
+        f"Processed {result['processed']} planned posts: "
+        f"{result['published']} ok, {result['failed']} failed."
+    )
+    return result
+
+
 def _friendly_publish_error(platform: str, error: str) -> str:
     if platform != "vk":
         return error
@@ -367,6 +420,25 @@ def _print_plan_result(result: dict[str, int]) -> None:
     if "skipped_baseline" in result:
         message += f" Skipped baseline: {result['skipped_baseline']}."
     typer.echo(message)
+
+
+def _plan_platform_posts(
+    store: Store,
+    settings: Settings,
+    *,
+    platform: str,
+    board_id: str | None = None,
+    vk_owner_id: str | None = None,
+) -> dict[str, int]:
+    return store.plan_posts(
+        platform=platform,
+        board_id=_pinterest_board_id_for_planning(settings, board_id, prefer_zernio=platform == "pinterest"),
+        vk_owner_id=_vk_owner_id_for_planning(settings, vk_owner_id),
+        vk_from_group=settings.vk_from_group,
+        vk_upload_photo=settings.vk_upload_photo,
+        tracking_params=_tracking_params(settings, platform),
+        only_after_baseline=True,
+    )
 
 
 def _retry_failed_for_publish(
@@ -1060,14 +1132,6 @@ def wb_vk_cycle(
     )
     _print_wb_browser_sync_result(sync_result)
 
-    retry_result = _retry_failed_for_publish(store, settings, platform="vk")
-    if retry_result["retried"] or retry_result["skipped_ineligible"] or retry_result["skipped_missing_product"]:
-        typer.echo(
-            f"Auto-retried {retry_result['retried']} failed posts. "
-            f"Skipped ineligible: {retry_result['skipped_ineligible']}. "
-            f"Skipped missing products: {retry_result['skipped_missing_product']}."
-        )
-
     planned_posts = store.list_posts(platform="vk", status=PostStatus.PLANNED)
     if not planned_posts:
         typer.echo("No new products found. Nothing to publish.")
@@ -1079,22 +1143,14 @@ def wb_vk_cycle(
         return
 
     typer.echo("\nStep 2/3: publish VK dry-run" if dry_run else "\nStep 2/3: publish VK real browser")
-    publisher = _build_social_publisher(
-        settings,
-        "vk",
+    publish_result = _publish_platform_after_scan(
+        store=store,
+        settings=settings,
+        platform="vk",
         dry_run=dry_run,
         out_dir=out_dir or settings.out_dir,
+        limit=limit,
         browser=False if dry_run else browser,
-    )
-    publish_result = _publish_planned_posts(
-        store,
-        publisher,
-        "vk",
-        limit=_publish_limit(settings, "vk", limit),
-    )
-    typer.echo(
-        f"Processed {publish_result['processed']} planned posts: "
-        f"{publish_result['published']} ok, {publish_result['failed']} failed."
     )
 
     typer.echo("\nStep 3/3: status")
@@ -1189,19 +1245,6 @@ def wb_pinterest_cycle(
     )
     _print_wb_browser_sync_result(sync_result)
 
-    retry_result = _retry_failed_for_publish(
-        store,
-        settings,
-        platform="pinterest",
-        board_id=planning_board_id,
-    )
-    if retry_result["retried"] or retry_result["skipped_ineligible"] or retry_result["skipped_missing_product"]:
-        typer.echo(
-            f"Auto-retried {retry_result['retried']} failed posts. "
-            f"Skipped ineligible: {retry_result['skipped_ineligible']}. "
-            f"Skipped missing products: {retry_result['skipped_missing_product']}."
-        )
-
     planned_posts = store.list_posts(platform="pinterest", status=PostStatus.PLANNED)
     if not planned_posts:
         typer.echo("No new products found. Nothing to publish.")
@@ -1219,26 +1262,201 @@ def wb_pinterest_cycle(
     else:
         typer.echo("\nStep 2/3: publish Pinterest real direct API")
 
-    publisher = _build_social_publisher(
-        settings,
-        "pinterest",
+    publish_result = _publish_platform_after_scan(
+        store=store,
+        settings=settings,
+        platform="pinterest",
         dry_run=dry_run,
         out_dir=out_dir or settings.out_dir,
+        limit=limit,
+        board_id=planning_board_id,
         zernio=zernio,
-    )
-    publish_result = _publish_planned_posts(
-        store,
-        publisher,
-        "pinterest",
-        limit=_publish_limit(settings, "pinterest", limit),
-    )
-    typer.echo(
-        f"Processed {publish_result['processed']} planned posts: "
-        f"{publish_result['published']} ok, {publish_result['failed']} failed."
     )
 
     typer.echo("\nStep 3/3: status")
     _print_wb_pinterest_cycle_summary(store=store, sync_result=sync_result, publish_result=publish_result)
+
+
+@app.command()
+def wb_instagram_cycle(
+    seller_url: str = typer.Option(..., help="WB seller URL sorted by newness."),
+    scan_limit: int = typer.Option(100, help="How many top seller products to scan as newest candidates."),
+) -> None:
+    """Reserved WB -> Instagram cycle command for the next integration stage."""
+    raise typer.BadParameter(
+        "Instagram cycle is not implemented yet. "
+        "Use wb-vk-cycle, wb-pinterest-cycle, or wb-social-cycle with --no-instagram."
+    )
+
+
+@app.command()
+def wb_social_cycle(
+    seller_url: str = typer.Option(..., help="WB seller URL sorted by newness."),
+    scan_limit: int = typer.Option(100, help="How many top seller products to scan as newest candidates."),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--no-dry-run",
+        help="Dry-run is the safe default. Use --no-dry-run only after platform checks pass.",
+    ),
+    vk: bool = typer.Option(True, "--vk/--no-vk", help="Plan and publish VK posts."),
+    pinterest: bool = typer.Option(True, "--pinterest/--no-pinterest", help="Plan and publish Pinterest posts."),
+    instagram: bool = typer.Option(False, "--instagram/--no-instagram", help="Reserved for the later Instagram cycle."),
+    vk_browser: bool = typer.Option(False, "--vk-browser", help="Publish real VK posts through browser automation."),
+    pinterest_zernio: bool = typer.Option(
+        True,
+        "--pinterest-zernio/--pinterest-direct-api",
+        help="Use Zernio for real Pinterest publishing. Direct API uses Pinterest API settings.",
+    ),
+    vk_limit: int | None = typer.Option(None, help="Maximum number of VK posts to process."),
+    pinterest_limit: int | None = typer.Option(None, help="Maximum number of Pinterest posts to process."),
+    board_id: str | None = typer.Option(None, help="Pinterest board ID used for planning."),
+    vk_owner_id: str | None = typer.Option(None, help="VK wall owner ID used for planning VK posts."),
+    db_path: Path | None = typer.Option(None, help="SQLite database path."),
+    user_data_dir: Path | None = typer.Option(
+        None,
+        help="Persistent WB browser profile directory. Use the same profile as wb-browser-baseline.",
+    ),
+    browser_engine: str = typer.Option(
+        "selenium",
+        help="WB browser engine: selenium or playwright. Selenium uses undetected_chromedriver.",
+    ),
+    output_path: Path | None = typer.Option(None, help="Where to save scanned WB product cards JSON."),
+    state_path: Path | None = typer.Option(None, help="Optional WB browser storage state path."),
+    browser_channel: str | None = typer.Option("chrome", help="Browser channel for Playwright launch."),
+    cdp_url: str | None = typer.Option(None, help="Connect to an already running Chrome via CDP."),
+    chrome_binary: Path | None = typer.Option(None, help="Path to chrome.exe for Selenium/undetected_chromedriver."),
+    chromedriver_path: Path | None = typer.Option(None, help="Explicit chromedriver path for Selenium."),
+    auto_install_driver: bool = typer.Option(
+        True,
+        "--auto-install-driver/--no-auto-install-driver",
+        help="Let chromedriver-autoinstaller install a matching driver when no explicit path is provided.",
+    ),
+    headless: bool = typer.Option(False, help="Run WB browser headless. Visible mode is recommended for WB checks."),
+    manual_ready: bool = typer.Option(
+        False,
+        "--manual-ready/--no-manual-ready",
+        help="Wait for Enter before scanning. Disabled by default.",
+    ),
+    ready_delay_seconds: float = typer.Option(2.0, help="Delay before scanning when --no-manual-ready is used."),
+    max_scrolls: int = typer.Option(80, help="Maximum WB scroll attempts."),
+    idle_scrolls: int = typer.Option(8, help="Stop WB scan after this many scrolls without new nmIDs."),
+    scroll_delay_ms: int = typer.Option(1400, help="Maximum wait for WB products to load after each scroll."),
+    scroll_pixels: int = typer.Option(1800, help="Vertical pixels per WB scroll step."),
+    out_dir: Path | None = typer.Option(None, help="Output directory for dry-run payloads and media artifacts."),
+) -> None:
+    """Run one WB scan, then post new products sequentially to selected social networks."""
+    if not vk and not pinterest and not instagram:
+        raise typer.BadParameter("At least one platform must be enabled.")
+    if instagram:
+        raise typer.BadParameter("Instagram cycle is not implemented yet. Run without --instagram for now.")
+
+    settings = load_settings()
+    store = Store(db_path or settings.db_path)
+    store.init_db()
+    _ensure_wb_browser_baseline(store)
+    if vk and not dry_run:
+        _ensure_vk_browser_ready_for_real_publish(settings, browser=vk_browser)
+
+    resolved_output_path = output_path or settings.out_dir / "wb_browser_new_scan_products.json"
+    resolved_state_path = state_path or settings.out_dir / "wb_browser_state.json"
+    resolved_out_dir = out_dir or settings.out_dir
+    planning_board_id = _pinterest_board_id_for_planning(settings, board_id, prefer_zernio=pinterest_zernio)
+
+    typer.echo("Step 1/4: scan WB new products")
+    sync_result = _sync_wb_browser_new_products(
+        settings=settings,
+        store=store,
+        seller_url=seller_url,
+        browser_engine=browser_engine,
+        scan_limit=scan_limit,
+        platform="vk" if vk else "pinterest",
+        board_id=planning_board_id,
+        vk_owner_id=vk_owner_id,
+        output_path=resolved_output_path,
+        state_path=resolved_state_path,
+        browser_channel=browser_channel,
+        user_data_dir=user_data_dir,
+        cdp_url=cdp_url,
+        chrome_binary=chrome_binary,
+        chromedriver_path=chromedriver_path,
+        auto_install_driver=auto_install_driver,
+        headless=headless,
+        manual_ready=manual_ready,
+        ready_delay_seconds=ready_delay_seconds,
+        max_scrolls=max_scrolls,
+        idle_scrolls=idle_scrolls,
+        scroll_delay_ms=scroll_delay_ms,
+        scroll_pixels=scroll_pixels,
+        plan=False,
+    )
+    _print_wb_browser_sync_result(sync_result)
+
+    typer.echo("\nStep 2/4: plan social posts")
+    plan_results: dict[str, dict[str, int]] = {}
+    if vk:
+        try:
+            plan_results["vk"] = _plan_platform_posts(
+                store,
+                settings,
+                platform="vk",
+                vk_owner_id=vk_owner_id,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo("VK:")
+        _print_plan_result(plan_results["vk"])
+    if pinterest:
+        try:
+            plan_results["pinterest"] = _plan_platform_posts(
+                store,
+                settings,
+                platform="pinterest",
+                board_id=planning_board_id,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo("Pinterest:")
+        _print_plan_result(plan_results["pinterest"])
+
+    typer.echo("\nStep 3/4: publish social posts")
+    publish_results: dict[str, dict[str, int]] = {}
+    if vk:
+        typer.echo("VK dry-run" if dry_run else "VK real browser")
+        publish_results["vk"] = _publish_platform_after_scan(
+            store=store,
+            settings=settings,
+            platform="vk",
+            dry_run=dry_run,
+            out_dir=resolved_out_dir,
+            limit=vk_limit,
+            vk_owner_id=vk_owner_id,
+            browser=False if dry_run else vk_browser,
+        )
+    if pinterest:
+        if dry_run:
+            typer.echo("Pinterest dry-run")
+        elif pinterest_zernio:
+            typer.echo("Pinterest real Zernio")
+        else:
+            typer.echo("Pinterest real direct API")
+        publish_results["pinterest"] = _publish_platform_after_scan(
+            store=store,
+            settings=settings,
+            platform="pinterest",
+            dry_run=dry_run,
+            out_dir=resolved_out_dir,
+            limit=pinterest_limit,
+            board_id=planning_board_id,
+            zernio=pinterest_zernio,
+        )
+
+    typer.echo("\nStep 4/4: status")
+    _print_wb_social_cycle_summary(
+        store=store,
+        sync_result=sync_result,
+        plan_results=plan_results,
+        publish_results=publish_results,
+    )
 
 
 def _print_wb_vk_cycle_summary(
@@ -1274,6 +1492,31 @@ def _print_wb_pinterest_cycle_summary(
     typer.echo(f"Planned posts created: {plan_result.get('planned', 0)}")
     typer.echo(f"Published / dry-run published: {publish_result['published']}")
     typer.echo(f"Failed: {publish_result['failed']}")
+    typer.echo(f"Posts by status: {summary['posts_by_status']}")
+
+
+def _print_wb_social_cycle_summary(
+    *,
+    store: Store,
+    sync_result: dict[str, object],
+    plan_results: dict[str, dict[str, int]],
+    publish_results: dict[str, dict[str, int]],
+) -> None:
+    seen_result = sync_result["seen_result"]
+    summary = store.summary()
+    typer.echo("WB -> social cycle summary")
+    typer.echo(f"Scanned products: {seen_result['total']}")
+    typer.echo(f"New nmIDs found: {seen_result['created']}")
+    for platform in ("vk", "pinterest", "instagram"):
+        if platform not in plan_results and platform not in publish_results:
+            continue
+        plan_result = plan_results.get(platform, {})
+        publish_result = publish_results.get(platform, {})
+        typer.echo(
+            f"{platform}: planned={plan_result.get('planned', 0)} "
+            f"published={publish_result.get('published', 0)} "
+            f"failed={publish_result.get('failed', 0)}"
+        )
     typer.echo(f"Posts by status: {summary['posts_by_status']}")
 
 

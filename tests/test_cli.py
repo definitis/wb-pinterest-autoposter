@@ -1000,6 +1000,100 @@ def test_wb_pinterest_cycle_real_publish_can_use_zernio(
     assert posts[0].external_id == "zernio-1"
 
 
+def test_wb_social_cycle_scans_once_and_publishes_vk_and_pinterest_dry_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls = 0
+
+    class FakeResult:
+        nm_ids = [1002, 1001]
+        products = [
+            make_product(
+                nm_id=1002,
+                title="Шапка женская вязаная",
+                description="Теплая шапка с отворотом для прохладной погоды.",
+                price=1490,
+                stock=1,
+            ),
+            make_product(nm_id=1001, title="Old browser product", price=990, stock=1),
+        ]
+        output_path = tmp_path / "scan.json"
+        iterations = 3
+
+    def fake_collect(**kwargs):
+        nonlocal calls
+        calls += 1
+        return FakeResult()
+
+    monkeypatch.setattr(cli_module, "collect_wb_seller_product_cards", fake_collect)
+    monkeypatch.setenv("ZERNIO_PINTEREST_BOARD_ID", "zernio-board-1")
+    db_path = tmp_path / "app.sqlite3"
+    out_dir = tmp_path / "out"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_seen_nm_ids([1001], source="wb-browser", mark_baseline=True)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "wb-social-cycle",
+            "--seller-url",
+            "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1",
+            "--db-path",
+            str(db_path),
+            "--out-dir",
+            str(out_dir),
+            "--dry-run",
+        ],
+    )
+
+    store = Store(db_path)
+    assert result.exit_code == 0
+    assert calls == 1
+    assert "Step 2/4: plan social posts" in result.output
+    assert "VK:" in result.output
+    assert "Pinterest:" in result.output
+    assert "WB -> social cycle summary" in result.output
+    assert len(store.list_posts(platform="vk", status=PostStatus.DRY_RUN_PUBLISHED)) == 1
+    assert len(store.list_posts(platform="pinterest", status=PostStatus.DRY_RUN_PUBLISHED)) == 1
+    assert len(list(out_dir.glob("vk_wall_post_*.json"))) == 1
+    assert len(list(out_dir.glob("pinterest_pin_*.json"))) == 1
+
+
+def test_wb_instagram_cycle_is_reserved_for_later(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "wb-instagram-cycle",
+            "--seller-url",
+            "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1",
+            "--scan-limit",
+            "1",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Instagram cycle is not implemented yet" in result.output
+
+
+def test_wb_social_cycle_rejects_instagram_until_implemented(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "wb-social-cycle",
+            "--seller-url",
+            "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1",
+            "--instagram",
+            "--db-path",
+            str(tmp_path / "app.sqlite3"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Instagram cycle is not implemented yet" in result.output
+
+
 def test_wb_vk_cycle_real_publish_requires_browser(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "app.sqlite3"
     store = Store(db_path)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from time import sleep
 
 import pytest
 
@@ -62,6 +63,7 @@ def test_baseline_blocks_current_assortment_and_allows_later_new_products(store:
         "skipped_baseline": 1,
     }
 
+    sleep(0.02)
     new_product = make_product(nm_id=1002, title="New product")
     store.upsert_products([existing, new_product])
     planned = store.plan_posts(platform="vk", vk_owner_id="-100", only_after_baseline=True)

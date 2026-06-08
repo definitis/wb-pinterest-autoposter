@@ -55,6 +55,14 @@ def test_load_settings_reads_post_limits(monkeypatch) -> None:
     assert settings.vk_post_limit_per_run == 3
 
 
+def test_load_settings_uses_demo_pinterest_board_when_env_is_empty(monkeypatch) -> None:
+    monkeypatch.setenv("PINTEREST_BOARD_ID", "")
+
+    settings = load_settings()
+
+    assert settings.pinterest_board_id == "demo-board"
+
+
 def test_load_settings_reads_zernio_settings(monkeypatch) -> None:
     monkeypatch.setenv("ZERNIO_API_KEY", "token")
     monkeypatch.setenv("ZERNIO_ENABLE_REAL_PUBLISH", "1")

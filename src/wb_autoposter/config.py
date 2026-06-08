@@ -75,7 +75,7 @@ def load_settings() -> Settings:
         db_path=Path(os.getenv("WB_AUTOPOSTER_DB_PATH", "out/app.sqlite3")),
         fake_products_path=Path(os.getenv("WB_FAKE_PRODUCTS_PATH", "data/fake_wb_products.json")),
         out_dir=Path(os.getenv("WB_AUTOPOSTER_OUT_DIR", "out")),
-        pinterest_board_id=os.getenv("PINTEREST_BOARD_ID", "demo-board"),
+        pinterest_board_id=os.getenv("PINTEREST_BOARD_ID") or "demo-board",
         pinterest_enable_real_publish=_parse_bool(os.getenv("PINTEREST_ENABLE_REAL_PUBLISH"), default=False),
         pinterest_utm_enabled=_parse_bool(os.getenv("PINTEREST_UTM_ENABLED"), default=False),
         pinterest_utm_source=os.getenv("PINTEREST_UTM_SOURCE", "pinterest"),
