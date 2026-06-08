@@ -1,0 +1,100 @@
+{
+  "products": [
+    {
+      "nm_id": 101000001,
+      "brand": "North Atelier",
+      "title": "Пальто шерстяное прямого кроя",
+      "description": "Демисезонное пальто с мягкой подкладкой и лаконичным силуэтом.",
+      "photos": [
+        "https://placehold.co/1200x1600/jpeg?text=WB+Product+101000001"
+      ],
+      "price": 7490,
+      "stock": 14,
+      "created_at": "2026-05-20T09:00:00Z",
+      "updated_at": "2026-05-20T09:00:00Z",
+      "url": "https://www.wildberries.ru/catalog/101000001/detail.aspx"
+    },
+    {
+      "nm_id": 101000002,
+      "brand": "North Atelier",
+      "title": "Платье миди с поясом",
+      "description": "Платье на каждый день с акцентом на талию и спокойной посадкой.",
+      "photos": [
+        "https://placehold.co/1200x1600/jpeg?text=WB+Product+101000002"
+      ],
+      "price": 3990,
+      "stock": 21,
+      "created_at": "2026-05-21T10:30:00Z",
+      "updated_at": "2026-05-21T10:30:00Z",
+      "url": "https://www.wildberries.ru/catalog/101000002/detail.aspx"
+    },
+    {
+      "nm_id": 101000003,
+      "brand": "North Atelier",
+      "title": "Худи oversize из футера",
+      "description": "Плотное худи свободного кроя для базовых casual-образов.",
+      "photos": [
+        "https://placehold.co/1200x1600/jpeg?text=WB+Product+101000003"
+      ],
+      "price": 2990,
+      "stock": 32,
+      "created_at": "2026-05-22T12:00:00Z",
+      "updated_at": "2026-05-22T12:00:00Z",
+      "url": "https://www.wildberries.ru/catalog/101000003/detail.aspx"
+    },
+    {
+      "nm_id": 101000004,
+      "brand": "North Atelier",
+      "title": "Брюки широкие со стрелками",
+      "description": "Брюки высокой посадки для офиса и повседневных комплектов.",
+      "photos": [
+        "https://placehold.co/1200x1600/jpeg?text=WB+Product+101000004"
+      ],
+      "price": 4590,
+      "stock": 18,
+      "created_at": "2026-05-23T13:00:00Z",
+      "updated_at": "2026-05-23T13:00:00Z",
+      "url": "https://www.wildberries.ru/catalog/101000004/detail.aspx"
+    },
+    {
+      "nm_id": 101000005,
+      "brand": "North Atelier",
+      "title": "Топ базовый без фото",
+      "description": "Карточка намеренно без фото для проверки фильтра.",
+      "photos": [],
+      "price": 1290,
+      "stock": 11,
+      "created_at": "2026-05-24T14:00:00Z",
+      "updated_at": "2026-05-24T14:00:00Z",
+      "url": "https://www.wildberries.ru/catalog/101000005/detail.aspx"
+    },
+    {
+      "nm_id": 101000006,
+      "brand": "North Atelier",
+      "title": "Рубашка без цены",
+      "description": "Карточка намеренно без цены для проверки фильтра.",
+      "photos": [
+        "https://placehold.co/1200x1600/jpeg?text=WB+Product+101000006"
+      ],
+      "price": null,
+      "stock": 9,
+      "created_at": "2026-05-25T15:00:00Z",
+      "updated_at": "2026-05-25T15:00:00Z",
+      "url": "https://www.wildberries.ru/catalog/101000006/detail.aspx"
+    },
+    {
+      "nm_id": 101000007,
+      "brand": "North Atelier",
+      "title": "Юбка без остатка",
+      "description": "Карточка намеренно с нулевым остатком для проверки фильтра.",
+      "photos": [
+        "https://placehold.co/1200x1600/jpeg?text=WB+Product+101000007"
+      ],
+      "price": 2490,
+      "stock": 0,
+      "created_at": "2026-05-26T16:00:00Z",
+      "updated_at": "2026-05-26T16:00:00Z",
+      "url": "https://www.wildberries.ru/catalog/101000007/detail.aspx"
+    }
+  ]
+}
