@@ -117,9 +117,9 @@ def test_content_generator_uses_one_gemini_response_for_all_platforms() -> None:
                             "parts": [
                                 {
                                     "text": (
-                                        '{"vk":"VK текст. Посмотрите товар.",'
-                                        '"instagram":"Instagram текст. Посмотрите товар.",'
-                                        '"pinterest":"Pinterest текст. Посмотрите товар."}'
+                                        '{"vk":"Test product. Посмотрите товар.",'
+                                        '"instagram":"Test product. Посмотрите товар.",'
+                                        '"pinterest":"Test product. Посмотрите товар."}'
                                     )
                                 }
                             ]
@@ -139,7 +139,89 @@ def test_content_generator_uses_one_gemini_response_for_all_platforms() -> None:
 
     assert len(requests) == 1
     assert content.platform_texts == {
-        "vk": "VK текст. Посмотрите товар.",
-        "instagram": "Instagram текст. Посмотрите товар.",
-        "pinterest": "Pinterest текст. Посмотрите товар.",
+        "vk": "Test product. Посмотрите товар.",
+        "instagram": "Test product. Посмотрите товар.",
+        "pinterest": "Test product. Посмотрите товар.",
     }
+
+
+def test_content_generator_falls_back_when_gemini_text_is_about_another_product() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": (
+                                        '{"vk":"Вешалки Mothercare для детской одежды.",'
+                                        '"instagram":"В комплекте 3 вешалки для шкафа.",'
+                                        '"pinterest":"Вешалки для хранения детских вещей."}'
+                                    )
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+
+    generator = TemplateContentGenerator(
+        gemini_api_key="gemini-key",
+        gemini_model="gemini-test",
+        client=httpx.Client(base_url="https://generativelanguage.googleapis.com", transport=httpx.MockTransport(handler)),
+    )
+
+    product = make_product(
+        title="Антицарапки для новорожденных Mothercare",
+        description="Мягкие варежки помогают закрыть ручки малыша от случайных царапин.",
+    )
+
+    content = generator.generate(product)
+
+    assert content.platform_texts is not None
+    assert "Антицарапки" in content.platform_texts["vk"]
+    assert "Вешалки" not in content.platform_texts["vk"]
+
+
+def test_content_generator_falls_back_when_gemini_text_uses_cliche() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": (
+                                        '{"vk":"Антицарапки Mothercare. Успейте купить, осталось всего 3 штуки.",'
+                                        '"instagram":"Антицарапки Mothercare для малыша. Успейте на Wildberries.",'
+                                        '"pinterest":"Антицарапки Mothercare. Посмотрите на Wildberries."}'
+                                    )
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+
+    generator = TemplateContentGenerator(
+        gemini_api_key="gemini-key",
+        gemini_model="gemini-test",
+        client=httpx.Client(base_url="https://generativelanguage.googleapis.com", transport=httpx.MockTransport(handler)),
+    )
+
+    product = make_product(
+        title="Антицарапки для новорожденных Mothercare",
+        description="Мягкие варежки помогают закрыть ручки малыша от случайных царапин.",
+    )
+
+    content = generator.generate(product)
+
+    assert content.platform_texts is not None
+    assert "Успейте" not in content.platform_texts["vk"]
+    assert "Мягкие варежки" in content.platform_texts["vk"]

@@ -15,6 +15,52 @@ from wb_autoposter.models import Product
 
 logger = logging.getLogger(__name__)
 
+_CONTENT_TOKEN_STOPWORDS = {
+    "wildberries",
+    "вайлдберриз",
+    "товар",
+    "товара",
+    "товары",
+    "карточка",
+    "карточке",
+    "ссылка",
+    "бренд",
+    "цена",
+    "руб",
+    "рублей",
+    "остаток",
+    "посмотрите",
+    "подробнее",
+    "новинка",
+    "новинки",
+    "комплект",
+    "набор",
+    "штуки",
+    "есть",
+}
+
+_FORBIDDEN_SOCIAL_COPY_PHRASES = {
+    "акция",
+    "в наличии всего",
+    "всего осталось",
+    "защитит нежную",
+    "защитят нежную",
+    "идеальн",
+    "лучший",
+    "нежную кожу",
+    "незаменим",
+    "наслаждайтесь",
+    "откройте для себя",
+    "подарит комфорт",
+    "полная безопасность",
+    "с любовью",
+    "срочно",
+    "топ продаж",
+    "успейте",
+    "хит продаж",
+    "must-have",
+}
+
 
 @dataclass(frozen=True)
 class GeneratedContent:
@@ -56,6 +102,7 @@ def generate_social_texts(product: ProductData) -> dict[str, str]:
             client=None,
         )
         result = _parse_gemini_social_texts(response.json())
+        _validate_social_texts_match_product(result, product)
         logger.info("Gemini content generation succeeded for product title=%r.", product.title)
         return result
     except Exception as exc:
@@ -148,6 +195,7 @@ class TemplateContentGenerator:
                     client=self.client,
                 )
             result = _parse_gemini_social_texts(response.json())
+            _validate_social_texts_match_product(result, product_data)
             logger.info("Gemini content generation succeeded for product nmID=%s.", product.nm_id)
             return result
         except Exception as exc:
@@ -246,9 +294,9 @@ def _post_gemini_request(
 
 
 def _gemini_prompt(product: ProductData) -> str:
-    return f"""Ты маркетолог для e-commerce.
+    return f"""Ты редактор коротких e-commerce публикаций.
 
-На основе карточки товара Wildberries создай короткие тексты для публикации в соцсетях.
+На основе карточки товара Wildberries создай тексты для соцсетей. Пиши по-русски, коротко и конкретно.
 
 Верни строго JSON без markdown:
 {{
@@ -259,28 +307,25 @@ def _gemini_prompt(product: ProductData) -> str:
 
 Требования:
 
-- каждый текст 2-4 предложения
+- каждый текст 1-2 коротких предложения
+- VK до 240 символов, Instagram до 220 символов, Pinterest до 180 символов
 - простой живой русский язык
-- не выдумывай характеристик, которых нет во входных данных
-- без чрезмерных обещаний
-- без канцелярита
-- добавь мягкий призыв посмотреть товар
-- адаптируй стиль под площадку
+- используй только факты из входных данных
+- не выдумывай свойства, сезонность, состав, выгоду или аудиторию
+- без эмодзи
+- без хэштегов
+- без канцелярита и восторженного тона
+- без клише: идеальный, must-have, незаменимый, полная безопасность, наслаждайтесь, откройте для себя, подарит комфорт, с любовью
+- без срочности и давления: не пиши "успейте", "всего осталось", "хит продаж", "акция"
+- не добавляй образы вроде "нежная кожа", если этого нет в описании карточки
+- мягкий CTA должен быть коротким: "Посмотрите на Wildberries" или похожая нейтральная фраза
+- если ссылка в Instagram может быть не кликабельной, не пиши "по ссылке в профиле"
 
-Для VK:
+Стиль:
 
-- чуть более информативно
-- акцент на пользу товара
-
-Для Instagram:
-
-- более живо и визуально
-- можно чуть эмоциональнее, но без кринжа
-
-Для Pinterest:
-
-- коротко
-- акцент на идею, стиль, применение или визуальную привлекательность
+- VK: чуть информативнее, 1 факт о товаре и короткий CTA
+- Instagram: живо, но без рекламного перегиба
+- Pinterest: максимально коротко, акцент на вид, идею или применение
 
 Данные товара:
 Название: {product.title}
@@ -305,6 +350,46 @@ def _parse_gemini_social_texts(body: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def _validate_social_texts_match_product(texts: dict[str, str], product: ProductData) -> None:
+    _validate_social_texts_style(texts)
+
+    tokens = _product_content_tokens(product)
+    if not tokens:
+        return
+
+    generated_text = _normalize_token_text(" ".join(texts.values()))
+    matches = {token for token in tokens if token in generated_text}
+    has_cyrillic_tokens = any(re.search(r"[а-яё]", token, flags=re.IGNORECASE) for token in tokens)
+    if has_cyrillic_tokens and matches:
+        return
+    if not has_cyrillic_tokens and len(matches) >= min(2, len(tokens)):
+        return
+
+    sample = ", ".join(sorted(tokens)[:6])
+    raise ValueError(f"Gemini response does not match product data; expected one of: {sample}")
+
+
+def _validate_social_texts_style(texts: dict[str, str]) -> None:
+    generated_text = _normalize_token_text(" ".join(texts.values()))
+    for phrase in _FORBIDDEN_SOCIAL_COPY_PHRASES:
+        if phrase in generated_text:
+            raise ValueError(f"Gemini response contains forbidden social copy phrase: {phrase}")
+
+
+def _product_content_tokens(product: ProductData) -> set[str]:
+    source = f"{product.title} {product.description}"
+    tokens = set()
+    for token in re.findall(r"[a-zа-яё]{4,}", _normalize_token_text(source), flags=re.IGNORECASE):
+        if token not in _CONTENT_TOKEN_STOPWORDS:
+            tokens.add(token)
+    cyrillic_tokens = {token for token in tokens if re.search(r"[а-яё]", token, flags=re.IGNORECASE)}
+    return cyrillic_tokens or tokens
+
+
+def _normalize_token_text(value: str) -> str:
+    return value.lower().replace("ё", "е")
+
+
 def _extract_gemini_text(body: dict[str, Any]) -> str:
     candidates = body.get("candidates")
     if not isinstance(candidates, list) or not candidates:
@@ -327,27 +412,26 @@ def _strip_json_markdown(text: str) -> str:
 
 def _limit_platform_text(text: str) -> str:
     cleaned = _clean_text(text)
-    return _limit(cleaned, 700)
+    return _limit(cleaned, 360)
 
 
 def _fallback_social_texts(product: ProductData) -> dict[str, str]:
     title = _sentence(_localize_title(product.title)).rstrip(".")
     fact = _extract_card_fact(product.description)
-    features = _clean_text(product.features.replace("Бренд: ", ""))
+    features = _clean_text(product.features.replace("Бренд: ", "").replace("Р‘СЂРµРЅРґ: ", ""))
     link = product.url.strip()
 
-    features_sentence = _sentence(features) if features else ""
-    vk_parts = [title + ".", fact, features_sentence, "Посмотрите карточку товара на Wildberries."]
-    instagram_parts = [title + ".", fact, features_sentence, "Можно найти на Wildberries по ссылке в карточке товара."]
-    pinterest_parts = [title + ".", fact, features_sentence, "Идея для подборки с новинками Wildberries."]
+    detail = fact or (_sentence(features) if features else "")
+    vk_parts = [title + ".", detail, "Посмотрите на Wildberries."]
+    instagram_parts = [title + ".", detail, "Есть на Wildberries."]
+    pinterest_parts = [title + ".", detail, "На Wildberries."]
     if link:
         vk_parts.append(link)
-        pinterest_parts.append(link)
 
     return {
-        "vk": _clean_text(" ".join(part for part in vk_parts if part)),
-        "instagram": _clean_text(" ".join(part for part in instagram_parts if part)),
-        "pinterest": _clean_text(" ".join(part for part in pinterest_parts if part)),
+        "vk": _limit_platform_text(" ".join(part for part in vk_parts if part)),
+        "instagram": _limit_platform_text(" ".join(part for part in instagram_parts if part)),
+        "pinterest": _limit_platform_text(" ".join(part for part in pinterest_parts if part)),
     }
 
 
