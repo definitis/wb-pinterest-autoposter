@@ -208,7 +208,7 @@ def _mostly_latin(value: str) -> bool:
 
 def _build_hashtags(brand: str, text: str) -> list[str]:
     tags = ["#Wildberries", "#ВБНовинки"]
-    brand_tag = _hashtag(brand)
+    brand_tag = _hashtag(_display_brand(brand, text))
     if brand_tag and brand_tag.lower() not in {tag.lower() for tag in tags}:
         tags.insert(0, brand_tag)
 
@@ -217,6 +217,18 @@ def _build_hashtags(brand: str, text: str) -> list[str]:
         tags.append(category_tag)
 
     return tags[:4]
+
+
+def _display_brand(brand: str, text: str) -> str:
+    if brand.strip().lower() not in {"wildberries", "wb", "вб", "вайлдберриз"}:
+        return brand
+
+    latin_tokens = re.findall(r"\b[A-Z][A-Za-z0-9&-]{2,}\b", text)
+    ignored = {"WB", "Wildberries"}
+    for token in reversed(latin_tokens):
+        if token not in ignored:
+            return token
+    return brand
 
 
 def _category_hashtag(text: str) -> str:

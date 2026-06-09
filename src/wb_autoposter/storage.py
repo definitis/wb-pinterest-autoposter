@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import html
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -640,7 +642,7 @@ def build_instagram_payload(
 
     generated_content = content or TemplateContentGenerator().generate(product)
     link = build_tracked_link(product.url.strip(), product.nm_id, tracking_params)
-    caption = _build_instagram_caption(generated_content, link)
+    caption = _build_instagram_caption(product, generated_content)
 
     return {
         "product_nm_id": product.nm_id,
@@ -689,9 +691,43 @@ def _build_vk_message(_product: Product, content: GeneratedContent, link: str) -
     return "\n\n".join(part for part in parts if part.strip())
 
 
-def _build_instagram_caption(content: GeneratedContent, link: str) -> str:
-    parts = [content.description, f"Ссылка на Вайлдберриз: {link}"]
-    return "\n\n".join(part for part in parts if part.strip())
+def _build_instagram_caption(product: Product, content: GeneratedContent) -> str:
+    title = content.title.rstrip(".")
+    fact = _short_caption_fact(product.description)
+    price = _format_caption_price(product.price)
+    tags = " ".join(content.hashtags)
+
+    price_line = f"Цена: {price}" if price else ""
+    article_line = f"Артикул WB: {product.nm_id}"
+
+    variant = product.nm_id % 3
+    if variant == 0:
+        lines = [title, fact, price_line, article_line]
+    elif variant == 1:
+        lines = [title, price_line, fact, article_line]
+    else:
+        lines = ["Новинка на Wildberries", title, fact, price_line, article_line]
+
+    body = "\n".join(line for line in lines if line.strip())
+    return "\n\n".join(part for part in [body, tags] if part.strip())
+
+
+def _format_caption_price(price: float | None) -> str:
+    if price is None:
+        return ""
+    return f"{price:,.0f}".replace(",", " ") + " руб."
+
+
+def _short_caption_fact(description: str) -> str:
+    cleaned = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", description))).strip()
+    if not cleaned:
+        return ""
+    sentence = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0].strip()
+    if len(sentence) < 12 or "http" in sentence.lower() or sentence.count("#") > 1:
+        return ""
+    if len(sentence) > 120:
+        sentence = sentence[:119].rsplit(" ", 1)[0].rstrip(".,;:") + "..."
+    return sentence.rstrip(".") + "."
 
 
 def build_tracked_link(url: str, nm_id: int, tracking_params: dict[str, str] | None = None) -> str:

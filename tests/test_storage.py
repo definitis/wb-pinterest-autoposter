@@ -187,8 +187,13 @@ def test_build_instagram_payload_uses_caption_link_and_photo() -> None:
 
     instagram_payload = payload["instagram"]
     assert instagram_payload["image_url"] == product.photos[0]
-    assert "Теплая шапка" in instagram_payload["caption"]
-    assert product.url in instagram_payload["caption"]
+    assert "Шапка женская вязаная" in instagram_payload["caption"]
+    assert "Цена: 1 000 руб." in instagram_payload["caption"]
+    assert "Артикул WB: 123" in instagram_payload["caption"]
+    assert "Перейти к товару" not in instagram_payload["caption"]
+    assert "Бренд:" not in instagram_payload["caption"]
+    assert product.url not in instagram_payload["caption"]
+    assert instagram_payload["link"] == product.url
 
 
 def test_build_vk_payload_without_photo_upload_keeps_link_only_in_message() -> None:
@@ -222,7 +227,7 @@ def test_plan_posts_can_create_instagram_posts(store: Store) -> None:
     assert result == {"planned": 1, "skipped_existing": 0, "skipped_ineligible": 0}
     post = store.list_posts(platform="instagram", status=PostStatus.PLANNED)[0]
     assert post.payload["instagram"]["image_url"] == product.photos[0]
-    assert "Вайлдберриз" in post.payload["instagram"]["caption"]
+    assert "Артикул WB" in post.payload["instagram"]["caption"]
 
 
 def test_build_tracked_link_keeps_original_link_without_tracking_params() -> None:

@@ -69,3 +69,18 @@ def test_content_generator_does_not_duplicate_wildberries_tag_or_price_dot() -> 
     assert content.hashtags.count("#Wildberries") == 1
     assert "руб.." not in content.description
     assert "Цена: 5 895 руб." in content.description
+
+
+def test_content_generator_uses_brand_from_title_when_wb_brand_is_generic() -> None:
+    product = make_product(
+        nm_id=1005,
+        brand="Wildberries",
+        title="Леггинсы детские лосины хлопок Mothercare",
+        description="",
+        price=649,
+    )
+
+    content = TemplateContentGenerator().generate(product)
+
+    assert "#Mothercare" in content.hashtags
+    assert content.hashtags.count("#Wildberries") == 1
