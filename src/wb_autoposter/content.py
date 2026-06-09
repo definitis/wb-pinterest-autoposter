@@ -418,15 +418,24 @@ def _strip_json_markdown(text: str) -> str:
     return cleaned.strip()
 
 
+def sanitize_social_text(text: str) -> str:
+    cleaned = re.sub(
+        r"(?iu)\b(?:бренд|brand)\s*:?\s*(?:wildberries|wb|вб|вайлдберриз)\b[.!?,;:]*",
+        " ",
+        text,
+    )
+    return _clean_text(cleaned)
+
+
 def _limit_platform_text(text: str) -> str:
-    cleaned = _clean_text(text)
+    cleaned = sanitize_social_text(text)
     return _limit(cleaned, 360)
 
 
 def _fallback_social_texts(product: ProductData) -> dict[str, str]:
     title = _sentence(_localize_title(product.title)).rstrip(".")
     fact = _extract_card_fact(product.description)
-    features = _clean_text(product.features.replace("Бренд: ", "").replace("Р‘СЂРµРЅРґ: ", ""))
+    features = _social_feature_detail(product.features, title)
     link = product.url.strip()
 
     detail = fact or (_sentence(features) if features else "")
@@ -441,6 +450,30 @@ def _fallback_social_texts(product: ProductData) -> dict[str, str]:
         "instagram": _limit_platform_text(" ".join(part for part in instagram_parts if part)),
         "pinterest": _limit_platform_text(" ".join(part for part in pinterest_parts if part)),
     }
+
+
+def _social_feature_detail(features: str, title: str) -> str:
+    parts = []
+    title_lower = title.lower()
+    for raw_part in features.split(";"):
+        part = _clean_text(raw_part)
+        if not part:
+            continue
+        if ":" not in part:
+            parts.append(part)
+            continue
+        name, value = [item.strip().rstrip(".") for item in part.split(":", 1)]
+        name_lower = name.lower()
+        value_lower = value.lower()
+        if name_lower in {"бренд", "brand"}:
+            if value_lower in _GENERIC_MARKETPLACE_BRANDS or value_lower in title_lower:
+                continue
+            parts.append(f"Бренд: {value}")
+            continue
+        if name_lower in {"остаток", "stock"}:
+            continue
+        parts.append(f"{name}: {value}")
+    return ". ".join(parts)
 
 
 def _product_features(product: Product) -> str:

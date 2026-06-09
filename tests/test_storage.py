@@ -191,8 +191,43 @@ def test_build_instagram_payload_uses_caption_link_and_photo() -> None:
     assert "Шапка женская вязаная" in instagram_payload["caption"]
     assert "Перейти к товару" not in instagram_payload["caption"]
     assert "Бренд:" not in instagram_payload["caption"]
+    assert "Артикул WB: 123" in instagram_payload["caption"]
     assert product.url not in instagram_payload["caption"]
     assert instagram_payload["link"] == product.url
+
+
+def test_build_instagram_payload_adds_article_for_generated_platform_text() -> None:
+    product = make_product(nm_id=1026705774, url="https://www.wildberries.ru/catalog/1026705774/detail.aspx")
+    content = GeneratedContent(
+        title="Антицарапки Mothercare",
+        description="Fallback",
+        cta="Посмотреть",
+        hashtags=["#Mothercare"],
+        platform_texts={"instagram": "Антицарапки Mothercare. Бренд Wildberries. Посмотрите на Wildberries."},
+    )
+
+    payload = build_instagram_payload(product, content)
+    caption = payload["instagram"]["caption"]
+
+    assert "Артикул WB: 1026705774" in caption
+    assert "Бренд Wildberries" not in caption
+    assert product.url not in caption
+
+
+def test_build_pinterest_payload_strips_generic_marketplace_brand_phrase() -> None:
+    product = make_product(nm_id=1026705774)
+    content = GeneratedContent(
+        title="Антицарапки Mothercare",
+        description="Fallback",
+        cta="Посмотреть",
+        hashtags=["#Mothercare"],
+        platform_texts={"pinterest": "Антицарапки Mothercare. Бренд: Wildberries. На Wildberries."},
+    )
+
+    payload = build_pinterest_payload(product, "board-1", content)
+
+    assert "Бренд" not in payload["pinterest"]["description"]
+    assert "Антицарапки Mothercare" in payload["pinterest"]["description"]
 
 
 def test_build_vk_payload_without_photo_upload_keeps_link_only_in_message() -> None:
@@ -260,7 +295,7 @@ def test_plan_posts_reuses_generated_platform_texts_across_platforms(store: Stor
     instagram_post = store.list_posts(platform="instagram", status=PostStatus.PLANNED)[0]
     assert calls == 1
     assert pinterest_post.payload["pinterest"]["description"] == "Pinterest текст"
-    assert instagram_post.payload["instagram"]["caption"] == "Instagram текст\n\n#Wildberries"
+    assert instagram_post.payload["instagram"]["caption"] == "Instagram текст\n\nАртикул WB: 999001\n\n#Wildberries"
 
 
 def test_build_tracked_link_keeps_original_link_without_tracking_params() -> None:

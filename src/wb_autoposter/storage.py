@@ -12,7 +12,7 @@ from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, Uniqu
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from wb_autoposter.content import GeneratedContent, TemplateContentGenerator, create_content_generator
+from wb_autoposter.content import GeneratedContent, TemplateContentGenerator, create_content_generator, sanitize_social_text
 from wb_autoposter.models import PlannedPost, PostStatus, Product
 
 
@@ -733,9 +733,10 @@ def _build_vk_message(_product: Product, content: GeneratedContent, link: str) -
 
 def _build_instagram_caption(product: Product, content: GeneratedContent) -> str:
     instagram_text = _platform_text(content, "instagram", "")
+    article_line = f"Артикул WB: {product.nm_id}"
     if instagram_text:
         tags = " ".join(content.hashtags)
-        return "\n\n".join(part for part in [instagram_text, tags] if part.strip())
+        return "\n\n".join(part for part in [instagram_text, article_line, tags] if part.strip())
 
     title = content.title.rstrip(".")
     fact = _short_caption_fact(product.description)
@@ -761,8 +762,8 @@ def _platform_text(content: GeneratedContent, platform: str, fallback: str) -> s
     if content.platform_texts:
         value = content.platform_texts.get(platform)
         if isinstance(value, str) and value.strip():
-            return value.strip()
-    return fallback
+            return sanitize_social_text(value)
+    return sanitize_social_text(fallback)
 
 
 def _format_caption_price(price: float | None) -> str:
