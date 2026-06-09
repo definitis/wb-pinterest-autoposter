@@ -679,12 +679,16 @@ def _content_from_existing_post(session: Session, nm_id: int) -> GeneratedConten
                 platform_texts = None
             else:
                 platform_texts = {str(key): str(value) for key, value in platform_texts.items() if isinstance(value, str)}
+        seo = generated.get("seo")
+        if seo is not None and not isinstance(seo, dict):
+            seo = None
         return GeneratedContent(
             title=title,
             description=description,
             cta=cta,
             hashtags=hashtags,
             platform_texts=platform_texts,
+            seo=seo,
         )
     return None
 
@@ -712,12 +716,13 @@ def build_pinterest_payload(
         raise ValueError(f"Product {product.nm_id} is not publishable.")
 
     generated_content = content or TemplateContentGenerator().generate(product)
+    pinterest_title = _seo_field(generated_content, "pinterest_title", generated_content.title)
 
     return {
         "product_nm_id": product.nm_id,
         "generated_content": generated_content.to_dict(),
         "pinterest": {
-            "title": generated_content.title,
+            "title": pinterest_title,
             "description": _platform_text(generated_content, "pinterest", generated_content.description),
             "board_id": board_id,
             "link": build_tracked_link(product.url.strip(), product.nm_id, tracking_params),
@@ -852,6 +857,14 @@ def _build_instagram_caption(product: Product, content: GeneratedContent) -> str
 def _platform_text(content: GeneratedContent, platform: str, fallback: str) -> str:
     if content.platform_texts:
         value = content.platform_texts.get(platform)
+        if isinstance(value, str) and value.strip():
+            return sanitize_social_text(value)
+    return sanitize_social_text(fallback)
+
+
+def _seo_field(content: GeneratedContent, key: str, fallback: str) -> str:
+    if isinstance(content.seo, dict):
+        value = content.seo.get(key)
         if isinstance(value, str) and value.strip():
             return sanitize_social_text(value)
     return sanitize_social_text(fallback)

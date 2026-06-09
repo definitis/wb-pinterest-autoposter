@@ -67,6 +67,7 @@ class Settings:
     zernio_instagram_content_type: str
     gemini_api_key: str | None
     gemini_model: str
+    content_rules_path: Path | None
 
 
 def load_settings() -> Settings:
@@ -139,6 +140,7 @@ def load_settings() -> Settings:
         zernio_instagram_content_type=os.getenv("ZERNIO_INSTAGRAM_CONTENT_TYPE", "feed").strip() or "feed",
         gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash",
+        content_rules_path=Path(os.getenv("CONTENT_RULES_PATH")) if os.getenv("CONTENT_RULES_PATH") else None,
     )
 
 

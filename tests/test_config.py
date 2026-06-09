@@ -88,11 +88,13 @@ def test_load_settings_reads_zernio_settings(monkeypatch) -> None:
 def test_load_settings_reads_gemini_settings(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-token")
     monkeypatch.setenv("GEMINI_MODEL", "gemini-test")
+    monkeypatch.setenv("CONTENT_RULES_PATH", "config/content_rules.example.json")
 
     settings = load_settings()
 
     assert settings.gemini_api_key == "gemini-token"
     assert settings.gemini_model == "gemini-test"
+    assert settings.content_rules_path == Path("config/content_rules.example.json")
 
 
 def test_load_settings_reads_wb_public_limits(monkeypatch) -> None:

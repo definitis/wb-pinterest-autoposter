@@ -1,0 +1,25 @@
+{
+  "forbidden_phrases": [
+    "бренд wildberries",
+    "успейте купить",
+    "хит продаж",
+    "идеальный выбор"
+  ],
+  "generic_marketplace_brands": [
+    "wildberries",
+    "wb",
+    "вб",
+    "вайлдберриз"
+  ],
+  "seo_stopwords": [
+    "артикул",
+    "карточка",
+    "товар",
+    "цена"
+  ],
+  "blocked_hashtags": [
+    "#wildberries",
+    "#wb",
+    "#вб"
+  ]
+}

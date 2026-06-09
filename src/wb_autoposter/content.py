@@ -12,6 +12,8 @@ import httpx
 
 from wb_autoposter.config import load_settings
 from wb_autoposter.models import Product
+from wb_autoposter.seo import build_product_seo
+from wb_autoposter.text_rules import ContentRules, load_content_rules
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +79,9 @@ class GeneratedContent:
     cta: str
     hashtags: list[str]
     platform_texts: dict[str, str] | None = None
+    seo: dict[str, Any] | None = None
 
-    def to_dict(self) -> dict[str, str | list[str] | dict[str, str] | None]:
+    def to_dict(self) -> dict[str, str | list[str] | dict[str, Any] | dict[str, str] | None]:
         return asdict(self)
 
 
@@ -120,7 +123,11 @@ def generate_social_texts(product: ProductData) -> dict[str, str]:
 
 def create_content_generator() -> "TemplateContentGenerator":
     settings = load_settings()
-    return TemplateContentGenerator(gemini_api_key=settings.gemini_api_key, gemini_model=settings.gemini_model)
+    return TemplateContentGenerator(
+        gemini_api_key=settings.gemini_api_key,
+        gemini_model=settings.gemini_model,
+        content_rules_path=settings.content_rules_path,
+    )
 
 
 class TemplateContentGenerator:
@@ -132,10 +139,12 @@ class TemplateContentGenerator:
         gemini_api_key: str | None = None,
         gemini_model: str = "gemini-2.5-flash",
         client: httpx.Client | None = None,
+        content_rules_path: Any = None,
     ) -> None:
         self.gemini_api_key = gemini_api_key
         self.gemini_model = gemini_model
         self.client = client
+        self.content_rules = load_content_rules(content_rules_path)
 
     def generate(self, product: Product) -> GeneratedContent:
         source_title = _clean_text(product.title)
@@ -144,7 +153,15 @@ class TemplateContentGenerator:
         card_fact = _extract_card_fact(product.description)
         price = _format_price(product.price)
         cta = _cta_for_product(product.nm_id)
-        hashtags = _build_hashtags(brand, f"{source_title} {card_fact}")
+        product_features = _product_features(product)
+        seo = build_product_seo(
+            title=source_title,
+            description=product.description,
+            features=product_features,
+            brand=brand,
+            rules=self.content_rules,
+        )
+        hashtags = _merge_hashtags(_build_hashtags(brand, f"{source_title} {card_fact}"), seo.hashtags)
 
         description_body = _build_description(
             variant=product.nm_id % len(_DESCRIPTION_VARIANTS),
@@ -161,7 +178,7 @@ class TemplateContentGenerator:
             ProductData(
                 title=title,
                 description=card_fact or product.description,
-                features=_product_features(product),
+                features=product_features,
                 url=product.url,
             )
         )
@@ -173,6 +190,7 @@ class TemplateContentGenerator:
             cta=cta,
             hashtags=hashtags,
             platform_texts=platform_texts or fallback_texts,
+            seo=seo.to_dict(),
         )
 
     def _generate_platform_texts(self, product: Product, *, title: str, description: str) -> dict[str, str] | None:
@@ -203,7 +221,7 @@ class TemplateContentGenerator:
                     client=self.client,
                 )
             result = _parse_gemini_social_texts(response.json())
-            _validate_social_texts_match_product(result, product_data)
+            _validate_social_texts_match_product(result, product_data, rules=self.content_rules)
             logger.info("Gemini content generation succeeded for product nmID=%s.", product.nm_id)
             return result
         except Exception as exc:
@@ -358,8 +376,13 @@ def _parse_gemini_social_texts(body: dict[str, Any]) -> dict[str, str]:
     return result
 
 
-def _validate_social_texts_match_product(texts: dict[str, str], product: ProductData) -> None:
-    _validate_social_texts_style(texts)
+def _validate_social_texts_match_product(
+    texts: dict[str, str],
+    product: ProductData,
+    *,
+    rules: ContentRules | None = None,
+) -> None:
+    _validate_social_texts_style(texts, rules=rules)
 
     tokens = _product_content_tokens(product)
     if not tokens:
@@ -377,18 +400,21 @@ def _validate_social_texts_match_product(texts: dict[str, str], product: Product
     raise ValueError(f"Gemini response does not match product data; expected one of: {sample}")
 
 
-def _validate_social_texts_style(texts: dict[str, str]) -> None:
+def _validate_social_texts_style(texts: dict[str, str], *, rules: ContentRules | None = None) -> None:
     generated_text = _normalize_token_text(" ".join(texts.values()))
-    for phrase in _FORBIDDEN_SOCIAL_COPY_PHRASES:
+    active_rules = rules or load_content_rules()
+    forbidden_phrases = _FORBIDDEN_SOCIAL_COPY_PHRASES | active_rules.forbidden_phrases
+    for phrase in forbidden_phrases:
         if phrase in generated_text:
             raise ValueError(f"Gemini response contains forbidden social copy phrase: {phrase}")
 
 
 def _product_content_tokens(product: ProductData) -> set[str]:
     source = f"{product.title} {product.description}"
+    stopwords = _CONTENT_TOKEN_STOPWORDS | load_content_rules().seo_stopwords
     tokens = set()
     for token in re.findall(r"[a-zа-яё]{4,}", _normalize_token_text(source), flags=re.IGNORECASE):
-        if token not in _CONTENT_TOKEN_STOPWORDS:
+        if token not in stopwords:
             tokens.add(token)
     cyrillic_tokens = {token for token in tokens if re.search(r"[а-яё]", token, flags=re.IGNORECASE)}
     return cyrillic_tokens or tokens
@@ -419,11 +445,16 @@ def _strip_json_markdown(text: str) -> str:
 
 
 def sanitize_social_text(text: str) -> str:
-    cleaned = re.sub(
-        r"(?iu)\b(?:бренд|brand)\s*:?\s*(?:wildberries|wb|вб|вайлдберриз)\b[.!?,;:]*",
-        " ",
-        text,
-    )
+    generic_brands = _GENERIC_MARKETPLACE_BRANDS | load_content_rules().generic_marketplace_brands
+    brand_pattern = "|".join(re.escape(brand) for brand in sorted(generic_brands, key=len, reverse=True) if brand)
+    cleaned = text
+    brand_label_pattern = r"(?:\u0431\u0440\u0435\u043d\u0434|brand)"
+    if brand_pattern:
+        cleaned = re.sub(
+            rf"(?iu)\b{brand_label_pattern}\s*:?\s*(?:{brand_pattern})\b[.!?,;:]*",
+            " ",
+            cleaned,
+        )
     return _clean_text(cleaned)
 
 
@@ -630,8 +661,25 @@ def _build_hashtags(brand: str, text: str) -> list[str]:
     return tags[:4]
 
 
+def _merge_hashtags(primary: list[str], secondary: list[str], *, limit: int = 6) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for tag in [*primary, *secondary]:
+        if not tag or not tag.startswith("#"):
+            continue
+        normalized = tag.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(tag)
+        if len(result) >= limit:
+            break
+    return result
+
+
 def _display_brand(brand: str, text: str) -> str:
-    if brand.strip().lower() not in {"wildberries", "wb", "вб", "вайлдберриз"}:
+    generic_brands = _GENERIC_MARKETPLACE_BRANDS | load_content_rules().generic_marketplace_brands
+    if brand.strip().lower() not in generic_brands:
         return brand
 
     latin_tokens = re.findall(r"\b[A-Z][A-Za-z0-9&-]{2,}\b", text)
@@ -644,7 +692,8 @@ def _display_brand(brand: str, text: str) -> str:
 
 def _copy_brand(brand: str, text: str) -> str:
     brand = _clean_text(brand)
-    if brand.strip().lower() not in _GENERIC_MARKETPLACE_BRANDS:
+    generic_brands = _GENERIC_MARKETPLACE_BRANDS | load_content_rules().generic_marketplace_brands
+    if brand.strip().lower() not in generic_brands:
         return brand
 
     latin_tokens = re.findall(r"\b[A-Z][A-Za-z0-9&-]{2,}\b", text)

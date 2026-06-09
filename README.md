@@ -382,6 +382,7 @@ Remove-Item out\app.sqlite3
 ```env
 GEMINI_API_KEY=your_google_ai_studio_key
 GEMINI_MODEL=gemini-2.5-flash
+CONTENT_RULES_PATH=config/content_rules.example.json
 ```
 
 Один товар обрабатывается одним запросом к Gemini. В одном ответе модель возвращает JSON сразу для трех площадок:
@@ -397,6 +398,8 @@ GEMINI_MODEL=gemini-2.5-flash
 Это экономит лимиты бесплатного API: не нужно делать отдельный запрос для VK, отдельный для Instagram и отдельный для Pinterest. Если сначала планируется Pinterest, а потом Instagram/VK для того же товара, уже сохраненный `generated_content.platform_texts` переиспользуется из payload.
 
 Если `GEMINI_API_KEY` не задан или Gemini вернул невалидный JSON, пайплайн не падает. В лог пишется, что использован fallback, а тексты собираются локальными шаблонами из названия, описания, характеристик и ссылки.
+
+Правила текста можно менять без правки кода через `CONTENT_RULES_PATH`. Пример лежит в `config/content_rules.example.json`: туда добавляются запретные фразы, generic marketplace-бренды вроде `wildberries/wb/вб`, SEO stopwords и заблокированные хэштеги. Эти правила используются при валидации ответа Gemini, fallback-текстах, SEO-ключах и чистке фразы вида `Бренд: Wildberries`.
 
 ## Fake/Dry-Run Проверка Без Реальных WB И VK
 
@@ -697,7 +700,7 @@ python -m wb_autoposter.cli metrics-report --platform all
 
 Для Instagram клики на WB из caption честно не считаются как кликабельная ссылка, поэтому основной смысл метрик там - охват и вовлеченность: `reach`, `views`, `likes`, `comments`, `saves`. Для Pinterest можно смотреть еще и `clicks`, потому что ссылка на товар передается как destination link пина.
 
-Реальный Zernio-publish для Pinterest добавлен отдельным publisher и заблокирован safety-флагом. Он запускается только при `ZERNIO_ENABLE_REAL_PUBLISH=1`, заполненных `ZERNIO_API_KEY`, `ZERNIO_PINTEREST_ACCOUNT_ID` и `ZERNIO_PINTEREST_BOARD_ID`. Instagram оставлен следующим шагом после проверки Pinterest.
+Реальный Zernio-publish для Pinterest и Instagram добавлен отдельными publisher-классами и заблокирован safety-флагом. Он запускается только при `ZERNIO_ENABLE_REAL_PUBLISH=1`, заполненном `ZERNIO_API_KEY` и нужных account/board ID для выбранной площадки.
 
 **VK API**
 
@@ -863,6 +866,38 @@ python -m pytest
 - VK dry-run, payload validation, wall check, UTM, API request/error handling и photo upload chain;
 - VK browser routing, safety switches и media download.
 
+## Текущее Состояние Проекта
+
+На текущем этапе проект работает как MVP автопостинга новинок WB:
+
+- сканирует новые товары продавца WB через browser/public fallback и сохраняет антидубли в SQLite;
+- перед публикацией генерирует короткие тексты для VK, Instagram и Pinterest одним запросом к Gemini;
+- дополнительно строит SEO-данные карточки: keywords, hashtags, общий title и `pinterest_title`;
+- применяет настраиваемые правила текста из `CONTENT_RULES_PATH`, чтобы убирать фразы вроде `Бренд: Wildberries`, запрещать клише и не тащить marketplace-бренд как бренд товара;
+- публикует VK отдельной командой, Pinterest отдельной командой, Instagram отдельной командой или последовательно через `wb-social-cycle`;
+- для Instagram не вставляет WB-ссылку в caption как основной CTA, а добавляет `Артикул WB: <nmID>`, потому что внешние ссылки в Instagram-постах не работают как нормальный кликабельный канал;
+- для Pinterest передает WB-ссылку как destination link;
+- соцметрики считаются через Zernio analytics по опубликованным Pinterest/Instagram постам, без redirect-ссылок.
+
+Быстрый ручной прогон:
+
+```powershell
+python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/..." --scan-limit 100 --no-vk --pinterest --instagram --pinterest-zernio --dry-run --headless --no-manual-ready
+python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/..." --scan-limit 100 --no-vk --pinterest --instagram --pinterest-zernio --no-dry-run --pinterest-limit 1 --instagram-limit 1 --headless --no-manual-ready
+python -m wb_autoposter.cli sync-metrics --platform all --limit 50
+python -m wb_autoposter.cli metrics-report --platform all --limit 20
+```
+
+Для регулярного запуска на Windows есть готовые скрипты:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_social_cycle.ps1 -SellerUrl "https://www.wildberries.ru/seller/..." -RealPublish
+powershell -ExecutionPolicy Bypass -File scripts\sync_metrics.ps1
+powershell -ExecutionPolicy Bypass -File scripts\install_windows_tasks.ps1 -SellerUrl "https://www.wildberries.ru/seller/..." -RealPublish -Force
+```
+
+`scripts\run_social_cycle.ps1` без `-RealPublish` запускает dry-run. Для Linux/macOS пример cron лежит в `scripts/cron.example`.
+
 ## Roadmap
 
 1. Локальный dry-run MVP - готово.
@@ -872,10 +907,10 @@ python -m pytest
 5. WB API режим через `WBEnrichedProductSource` - готово на уровне кода, нужны токены и тестовый прогон.
 6. Добавить импорт выгрузки из кабинета WB (`seller-export`) как отдельный источник: CSV/XLSX с `nmID`, артикулами, статусом, ценой, остатками и датами. Использовать его для первичного baseline вместо browser-сбора, а при регулярной выгрузке - как источник новинок.
 7. Протестировать `baseline-sync --mode real-ready` и последующий `run-cycle --mode real-ready` на реальном кабинете WB.
-8. Добавить redirect tracking: `social -> наш redirect -> WB`, чтобы считать клики.
-9. Перенести пилот на VPS/Docker/scheduler.
+8. Redirect tracking не обязателен для MVP: соцметрики считаются через Zernio analytics, а WB-ссылки остаются прямыми/с UTM без подозрительного промежуточного домена.
+9. Scheduler/autostart - добавлены Windows scheduled task scripts и cron example; VPS/Docker остается отдельным шагом, если нужен запуск без локального ПК.
 10. Добавить простой web-admin.
-11. Zernio publisher для Pinterest - добавлен; нужен `zernio-check` после подключения аккаунта и затем один контролируемый real publish.
-12. Zernio publisher для Instagram - следующий шаг после проверки Pinterest.
+11. Zernio publisher для Pinterest - добавлен и проверен реальной публикацией.
+12. Zernio publisher для Instagram - добавлен и проверен реальной публикацией; в caption используется артикул WB вместо некликабельной ссылки.
 13. Pinterest direct API: оставить как альтернативу, если заказчик хочет свой approved Pinterest Developer App, сайт/домен, privacy policy и OAuth token.
 14. Instagram direct API: подключать только если бизнесу важнее охват, чем кликабельный внешний трафик, либо если Zernio не подходит.

@@ -1,0 +1,11 @@
+# Example Linux/macOS cron entries.
+# Keep the project .env configured before enabling real publish.
+#
+# Dry-run social cycle every day at 10:00:
+# 0 10 * * * cd /path/to/project && python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/..." --scan-limit 100 --no-vk --pinterest --instagram --pinterest-zernio --dry-run --headless --no-manual-ready >> out/cron_social.log 2>&1
+#
+# Real Pinterest/Instagram cycle every day at 10:00:
+# 0 10 * * * cd /path/to/project && python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/..." --scan-limit 100 --no-vk --pinterest --instagram --pinterest-zernio --no-dry-run --pinterest-limit 1 --instagram-limit 1 --headless --no-manual-ready >> out/cron_social.log 2>&1
+#
+# Social metrics sync every day at 22:00:
+# 0 22 * * * cd /path/to/project && python -m wb_autoposter.cli sync-metrics --platform all --limit 50 >> out/cron_metrics.log 2>&1
