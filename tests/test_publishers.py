@@ -283,6 +283,40 @@ def test_zernio_instagram_publisher_uploads_webp_as_jpeg(tmp_path: Path) -> None
     assert request_json["mediaItems"] == [{"type": "image", "url": "https://media.zernio.test/wb.jpg"}]
 
 
+def test_zernio_instagram_publisher_raises_when_platform_publish_fails(tmp_path: Path) -> None:
+    client = httpx.Client(
+        base_url=ZernioPublisher.base_url,
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                201,
+                json={
+                    "post": {
+                        "_id": "zi-123",
+                        "status": "failed",
+                        "platforms": [
+                            {
+                                "platform": "instagram",
+                                "status": "failed",
+                                "errorMessage": "Instagram blocked your request.",
+                            }
+                        ],
+                    },
+                    "message": "Post created but publishing failed",
+                },
+            )
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Instagram blocked your request"):
+        ZernioInstagramPublisher(
+            "token",
+            account_id="ig-1",
+            content_type="feed",
+            out_dir=tmp_path,
+            client=client,
+        ).publish(7, build_instagram_payload(make_product()))
+
+
 def test_zernio_publisher_lists_accounts() -> None:
     requests: list[httpx.Request] = []
 

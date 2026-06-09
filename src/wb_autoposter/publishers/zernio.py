@@ -104,7 +104,9 @@ class ZernioPublisher:
         )
         if response.status_code >= 400:
             raise ValueError(f"Zernio API error {response.status_code}: {_short_response_text(response)}")
-        return response.json()
+        body = response.json()
+        _raise_for_zernio_publish_failure(body)
+        return body
 
     def _prepare_instagram_media(self, request_body: dict[str, Any], *, post_id: int, nm_id: object) -> None:
         media_items = request_body.get("mediaItems")
@@ -331,6 +333,27 @@ def _extract_post_id(body: dict[str, Any]) -> str:
     if not post_id:
         raise ValueError("Zernio API response does not include post id.")
     return post_id
+
+
+def _raise_for_zernio_publish_failure(body: dict[str, Any]) -> None:
+    post = body.get("post")
+    if not isinstance(post, dict):
+        return
+
+    post_status = str(post.get("status") or "").lower()
+    platform_errors = []
+    for platform in post.get("platforms") or []:
+        if not isinstance(platform, dict):
+            continue
+        platform_status = str(platform.get("status") or "").lower()
+        if platform_status == "failed":
+            name = platform.get("platform") or "platform"
+            message = platform.get("errorMessage") or platform.get("error") or "publishing failed"
+            platform_errors.append(f"{name}: {message}")
+
+    if post_status == "failed" or platform_errors:
+        message = "; ".join(platform_errors) or str(body.get("error") or body.get("message") or "publishing failed")
+        raise ValueError(f"Zernio publishing failed: {message}")
 
 
 def _request_id(platform: str, post_id: int, request_body: dict[str, Any]) -> str:
