@@ -10,6 +10,7 @@ from wb_autoposter.adapters.wb_browser import SOURCE_NAME as WB_BROWSER_SOURCE_N
 from wb_autoposter.adapters.wb_browser import collect_wb_seller_product_cards
 from wb_autoposter.adapters.wb_browser import collect_wb_seller_nm_ids
 from wb_autoposter.config import Settings, load_settings
+from wb_autoposter.dashboard import export_dashboard as export_dashboard_html
 from wb_autoposter.models import PlannedPost, PostStatus, SocialPostMetrics
 from wb_autoposter.publishers import (
     InstagramApiPublisher,
@@ -2195,6 +2196,18 @@ def metrics_report(
     store = Store(db_path or settings.db_path)
     store.init_db()
     _print_metrics_report(store, platform=platform, limit=limit)
+
+
+@app.command()
+def export_dashboard(
+    output: Path = typer.Option(Path("out/dashboard.html"), help="Where to write the static HTML dashboard."),
+    db_path: Path | None = typer.Option(None, help="SQLite database path."),
+) -> None:
+    """Export a static local HTML dashboard for the current database state."""
+    settings = load_settings()
+    store = Store(db_path or settings.db_path)
+    path = export_dashboard_html(store, output)
+    typer.echo(f"Dashboard exported: {path}")
 
 
 @app.command()

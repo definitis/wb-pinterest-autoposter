@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from time import sleep
 
@@ -8,7 +9,7 @@ from typer.testing import CliRunner
 import wb_autoposter.cli as cli_module
 from wb_autoposter.adapters.fake_wb import FakeWBSource
 from wb_autoposter.cli import app
-from wb_autoposter.models import PostStatus, PublishResult
+from wb_autoposter.models import PostStatus, PublishResult, SocialPostMetrics
 from wb_autoposter.storage import Store
 
 from helpers import make_product
@@ -442,6 +443,75 @@ def test_sync_metrics_cli_fetches_zernio_metrics(
     assert report.exit_code == 0
     assert "impressions=321" in report.output
     assert "clicks=12" in report.output
+
+
+def test_export_dashboard_cli_creates_html_with_summary_statuses_failed_and_metrics(tmp_path: Path) -> None:
+    db_path = tmp_path / "app.sqlite3"
+    output_path = tmp_path / "dashboard.html"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_products([make_product(nm_id=123456, title="Легинсы детские Mothercare")])
+    store.plan_posts(platform="vk", vk_owner_id="-100")
+    store.plan_posts(platform="pinterest", board_id="board-1")
+    store.plan_posts(platform="instagram")
+
+    vk_post = store.list_posts(platform="vk", status=PostStatus.PLANNED)[0]
+    pinterest_post = store.list_posts(platform="pinterest", status=PostStatus.PLANNED)[0]
+    instagram_post = store.list_posts(platform="instagram", status=PostStatus.PLANNED)[0]
+    store.update_post_result(vk_post.id, PostStatus.DRY_RUN_PUBLISHED, "dry-vk-1", None)
+    store.update_post_result(pinterest_post.id, PostStatus.PUBLISHED, "pin-1", None)
+    store.update_post_result(instagram_post.id, PostStatus.FAILED, None, "Zernio upload failed")
+    store.save_post_metrics(
+        SocialPostMetrics(
+            post_id=pinterest_post.id,
+            product_nm_id=pinterest_post.product_nm_id,
+            platform="pinterest",
+            external_id="pin-1",
+            captured_at=datetime(2026, 6, 9, 12, 0, tzinfo=UTC),
+            impressions=321,
+            clicks=12,
+            saves=3,
+            likes=7,
+        )
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["export-dashboard", "--db-path", str(db_path), "--output", str(output_path)],
+    )
+
+    assert result.exit_code == 0
+    assert output_path.exists()
+    html = output_path.read_text(encoding="utf-8")
+    assert "WB Autoposter Dashboard" in html
+    assert "Summary" in html
+    assert "Posts by Platform" in html
+    assert "planned" in html
+    assert "published" in html
+    assert "dry_run_published" in html
+    assert "failed" in html
+    assert "Легинсы детские Mothercare" in html
+    assert "Zernio upload failed" in html
+    assert "pin-1" in html
+    assert "impressions=321" in html
+    assert "<td>321</td>" in html
+
+
+def test_export_dashboard_cli_handles_empty_database_and_missing_metrics(tmp_path: Path) -> None:
+    output_path = tmp_path / "nested" / "dashboard.html"
+
+    result = CliRunner().invoke(
+        app,
+        ["export-dashboard", "--db-path", str(tmp_path / "empty.sqlite3"), "--output", str(output_path)],
+    )
+
+    assert result.exit_code == 0
+    assert output_path.exists()
+    html = output_path.read_text(encoding="utf-8")
+    assert "Products" in html
+    assert "No posts saved yet." in html
+    assert "No failed posts." in html
+    assert "No metrics synced yet. Run sync-metrics first." in html
 
 
 def test_failed_publish_does_not_leave_post_planned(tmp_path: Path, fixture_path: Path, monkeypatch) -> None:

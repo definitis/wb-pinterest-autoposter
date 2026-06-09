@@ -235,6 +235,42 @@ CONTENT_RULES_PATH=config/content_rules.example.json
 
 Redirect tracking сейчас не используется: WB-ссылки остаются прямыми или с UTM, без подозрительного промежуточного домена.
 
+## Локальный Dashboard
+
+Проект рассчитан на автономную работу без постоянного оператора. Поэтому полноценная админ-панель не нужна для MVP.
+
+Для контроля можно сформировать статический HTML-отчёт:
+
+```powershell
+python -m wb_autoposter.cli export-dashboard
+```
+
+Результат:
+
+```text
+out/dashboard.html
+```
+
+Путь можно переопределить:
+
+```powershell
+python -m wb_autoposter.cli export-dashboard --output out/dashboard.html
+```
+
+В отчёте видно:
+
+- сколько постов `planned` / `published` / `failed` / `dry_run_published`;
+- статусы по VK, Pinterest и Instagram;
+- последние публикации;
+- ошибки публикации;
+- последние метрики, если они уже синхронизированы через Zernio.
+
+Это не ручная админ-панель, а лёгкий отчёт для контроля автономной системы. Если метрик ещё нет, сначала выполните:
+
+```powershell
+python -m wb_autoposter.cli sync-metrics
+```
+
 ## Экономика
 
 Задача проекта - не просто публиковать посты, а проверить, дает ли внешний трафик на WB экономический смысл.
