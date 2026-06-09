@@ -86,6 +86,9 @@ def test_content_generator_uses_brand_from_title_when_wb_brand_is_generic() -> N
 
     assert "#Mothercare" in content.hashtags
     assert content.hashtags.count("#Wildberries") == 1
+    assert "Бренд: Wildberries" not in content.description
+    assert content.platform_texts is not None
+    assert "Бренд: Wildberries" not in content.platform_texts["instagram"]
 
 
 def test_generate_social_texts_uses_fallback_without_gemini_key(monkeypatch) -> None:

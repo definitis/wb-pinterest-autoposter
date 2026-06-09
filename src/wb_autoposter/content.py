@@ -15,6 +15,8 @@ from wb_autoposter.models import Product
 
 logger = logging.getLogger(__name__)
 
+_GENERIC_MARKETPLACE_BRANDS = {"wildberries", "wb", "вб", "вайлдберриз"}
+
 _CONTENT_TOKEN_STOPWORDS = {
     "wildberries",
     "вайлдберриз",
@@ -41,8 +43,12 @@ _CONTENT_TOKEN_STOPWORDS = {
 
 _FORBIDDEN_SOCIAL_COPY_PHRASES = {
     "акция",
+    "бренд wildberries",
+    "бренд wb",
+    "бренд вайлдберриз",
     "в наличии всего",
     "всего осталось",
+    "закажите",
     "защитит нежную",
     "защитят нежную",
     "идеальн",
@@ -54,6 +60,8 @@ _FORBIDDEN_SOCIAL_COPY_PHRASES = {
     "подарит комфорт",
     "полная безопасность",
     "с любовью",
+    "купите",
+    "оформите",
     "срочно",
     "топ продаж",
     "успейте",
@@ -130,8 +138,8 @@ class TemplateContentGenerator:
         self.client = client
 
     def generate(self, product: Product) -> GeneratedContent:
-        brand = _clean_text(product.brand)
         source_title = _clean_text(product.title)
+        brand = _copy_brand(product.brand, source_title)
         title = _limit(_localize_title(source_title), 100)
         card_fact = _extract_card_fact(product.description)
         price = _format_price(product.price)
@@ -316,7 +324,7 @@ def _gemini_prompt(product: ProductData) -> str:
 - без хэштегов
 - без канцелярита и восторженного тона
 - без клише: идеальный, must-have, незаменимый, полная безопасность, наслаждайтесь, откройте для себя, подарит комфорт, с любовью
-- без срочности и давления: не пиши "успейте", "всего осталось", "хит продаж", "акция"
+- без срочности и давления: не пиши "успейте", "всего осталось", "хит продаж", "акция", "купите", "закажите"
 - не добавляй образы вроде "нежная кожа", если этого нет в описании карточки
 - мягкий CTA должен быть коротким: "Посмотрите на Wildberries" или похожая нейтральная фраза
 - если ссылка в Instagram может быть не кликабельной, не пиши "по ссылке в профиле"
@@ -437,8 +445,9 @@ def _fallback_social_texts(product: ProductData) -> dict[str, str]:
 
 def _product_features(product: Product) -> str:
     values = []
-    if product.brand:
-        values.append(f"Бренд: {product.brand}")
+    brand = _copy_brand(product.brand, f"{product.title} {product.description}")
+    if brand:
+        values.append(f"Бренд: {brand}")
     if product.price is not None:
         values.append(f"Цена: {_format_price(product.price)}")
     if product.stock > 0:
@@ -598,6 +607,19 @@ def _display_brand(brand: str, text: str) -> str:
         if token not in ignored:
             return token
     return brand
+
+
+def _copy_brand(brand: str, text: str) -> str:
+    brand = _clean_text(brand)
+    if brand.strip().lower() not in _GENERIC_MARKETPLACE_BRANDS:
+        return brand
+
+    latin_tokens = re.findall(r"\b[A-Z][A-Za-z0-9&-]{2,}\b", text)
+    ignored = {"WB", "Wildberries"}
+    for token in reversed(latin_tokens):
+        if token not in ignored:
+            return token
+    return ""
 
 
 def _category_hashtag(text: str) -> str:
