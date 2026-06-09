@@ -309,7 +309,7 @@ class Store:
                     skipped_ineligible += 1
                     continue
 
-                content = _content_from_existing_post(session, product.nm_id) or content_generator.generate(product)
+                content = _content_from_existing_post(session, product.nm_id, product=product) or content_generator.generate(product)
 
                 record = (
                     PostRecord(
@@ -378,7 +378,7 @@ class Store:
                     skipped_ineligible += 1
                     continue
 
-                content = _content_from_existing_post(session, product.nm_id) or content_generator.generate(product)
+                content = _content_from_existing_post(session, product.nm_id, product=product) or content_generator.generate(product)
                 record.status = PostStatus.PLANNED.value
                 record.payload_json = json.dumps(
                     build_social_payload(
@@ -449,7 +449,7 @@ class Store:
                     skipped_ineligible += 1
                     continue
 
-                content = _content_from_existing_post(session, product.nm_id) or content_generator.generate(product)
+                content = _content_from_existing_post(session, product.nm_id, product=product) or content_generator.generate(product)
                 record.status = PostStatus.PLANNED.value
                 record.payload_json = json.dumps(
                     build_social_payload(
@@ -634,7 +634,7 @@ class Store:
             record.error = "Product is no longer publishable."
             return
 
-        content = content_generator.generate(product)
+        content = _content_from_existing_post(session, product.nm_id, product=product) or content_generator.generate(product)
         record.payload_json = json.dumps(
             build_social_payload(
                 platform,
@@ -651,7 +651,7 @@ class Store:
         record.error = None
 
 
-def _content_from_existing_post(session: Session, nm_id: int) -> GeneratedContent | None:
+def _content_from_existing_post(session: Session, nm_id: int, product: Product | None = None) -> GeneratedContent | None:
     records = session.scalars(
         select(PostRecord)
         .where(PostRecord.product_nm_id == nm_id)
@@ -661,6 +661,8 @@ def _content_from_existing_post(session: Session, nm_id: int) -> GeneratedConten
         try:
             payload = json.loads(record.payload_json)
         except json.JSONDecodeError:
+            continue
+        if product is not None and payload.get("content_snapshot") != _content_snapshot(product):
             continue
         generated = payload.get("generated_content")
         if not isinstance(generated, dict):
@@ -720,6 +722,7 @@ def build_pinterest_payload(
 
     return {
         "product_nm_id": product.nm_id,
+        "content_snapshot": _content_snapshot(product),
         "generated_content": generated_content.to_dict(),
         "pinterest": {
             "title": pinterest_title,
@@ -754,6 +757,7 @@ def build_vk_payload(
 
     return {
         "product_nm_id": product.nm_id,
+        "content_snapshot": _content_snapshot(product),
         "generated_content": generated_content.to_dict(),
         "vk": {
             "owner_id": owner_id.strip(),
@@ -782,6 +786,7 @@ def build_instagram_payload(
 
     return {
         "product_nm_id": product.nm_id,
+        "content_snapshot": _content_snapshot(product),
         "generated_content": generated_content.to_dict(),
         "instagram": {
             "image_url": product.photos[0].strip(),
@@ -868,6 +873,15 @@ def _seo_field(content: GeneratedContent, key: str, fallback: str) -> str:
         if isinstance(value, str) and value.strip():
             return sanitize_social_text(value)
     return sanitize_social_text(fallback)
+
+
+def _content_snapshot(product: Product) -> dict[str, str | float | None]:
+    return {
+        "brand": product.brand.strip(),
+        "title": product.title.strip(),
+        "description": product.description.strip(),
+        "price": product.price,
+    }
 
 
 def _format_caption_price(price: float | None) -> str:

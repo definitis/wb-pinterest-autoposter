@@ -89,12 +89,16 @@ def test_load_settings_reads_gemini_settings(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-token")
     monkeypatch.setenv("GEMINI_MODEL", "gemini-test")
     monkeypatch.setenv("CONTENT_RULES_PATH", "config/content_rules.example.json")
+    monkeypatch.setenv("GEMINI_REQUEST_INTERVAL_SECONDS", "2.5")
+    monkeypatch.setenv("GEMINI_429_COOLDOWN_SECONDS", "30")
 
     settings = load_settings()
 
     assert settings.gemini_api_key == "gemini-token"
     assert settings.gemini_model == "gemini-test"
     assert settings.content_rules_path == Path("config/content_rules.example.json")
+    assert settings.gemini_request_interval_seconds == 2.5
+    assert settings.gemini_429_cooldown_seconds == 30
 
 
 def test_load_settings_reads_wb_public_limits(monkeypatch) -> None:

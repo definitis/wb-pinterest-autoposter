@@ -126,6 +126,8 @@ def create_content_generator() -> "TemplateContentGenerator":
     return TemplateContentGenerator(
         gemini_api_key=settings.gemini_api_key,
         gemini_model=settings.gemini_model,
+        gemini_request_interval_seconds=settings.gemini_request_interval_seconds,
+        gemini_429_cooldown_seconds=settings.gemini_429_cooldown_seconds,
         content_rules_path=settings.content_rules_path,
     )
 
@@ -138,13 +140,19 @@ class TemplateContentGenerator:
         *,
         gemini_api_key: str | None = None,
         gemini_model: str = "gemini-2.5-flash",
+        gemini_request_interval_seconds: float = 0.0,
+        gemini_429_cooldown_seconds: float = 0.0,
         client: httpx.Client | None = None,
         content_rules_path: Any = None,
     ) -> None:
         self.gemini_api_key = gemini_api_key
         self.gemini_model = gemini_model
+        self.gemini_request_interval_seconds = max(0.0, gemini_request_interval_seconds)
+        self.gemini_429_cooldown_seconds = max(0.0, gemini_429_cooldown_seconds)
         self.client = client
         self.content_rules = load_content_rules(content_rules_path)
+        self._last_gemini_request_at: float | None = None
+        self._gemini_cooldown_until: float | None = None
 
     def generate(self, product: Product) -> GeneratedContent:
         source_title = _clean_text(product.title)
@@ -198,6 +206,15 @@ class TemplateContentGenerator:
             logger.info("Gemini content generation skipped: GEMINI_API_KEY is not configured; using fallback.")
             return None
 
+        cooldown_remaining = self._gemini_cooldown_remaining()
+        if cooldown_remaining > 0:
+            logger.warning(
+                "Gemini content generation skipped for product nmID=%s: rate-limit cooldown active for %.1f sec.",
+                product.nm_id,
+                cooldown_remaining,
+            )
+            return None
+
         product_data = ProductData(
             title=title,
             description=description or product.description,
@@ -206,6 +223,7 @@ class TemplateContentGenerator:
         )
         logger.info("Gemini content generation started for product nmID=%s.", product.nm_id)
         try:
+            self._wait_for_gemini_slot()
             if self.client is None:
                 response = _post_gemini_request(
                     self.gemini_model,
@@ -225,8 +243,35 @@ class TemplateContentGenerator:
             logger.info("Gemini content generation succeeded for product nmID=%s.", product.nm_id)
             return result
         except Exception as exc:
+            if _is_rate_limited_error(exc):
+                self._activate_gemini_cooldown()
             logger.warning("Gemini content generation fallback used for product nmID=%s: %s", product.nm_id, exc)
             return None
+
+    def _wait_for_gemini_slot(self) -> None:
+        if self.gemini_request_interval_seconds <= 0:
+            self._last_gemini_request_at = time.monotonic()
+            return
+
+        now = time.monotonic()
+        if self._last_gemini_request_at is not None:
+            elapsed = now - self._last_gemini_request_at
+            wait_seconds = self.gemini_request_interval_seconds - elapsed
+            if wait_seconds > 0:
+                logger.info("Waiting %.1f sec before next Gemini request.", wait_seconds)
+                time.sleep(wait_seconds)
+        self._last_gemini_request_at = time.monotonic()
+
+    def _gemini_cooldown_remaining(self) -> float:
+        if self._gemini_cooldown_until is None:
+            return 0.0
+        return max(0.0, self._gemini_cooldown_until - time.monotonic())
+
+    def _activate_gemini_cooldown(self) -> None:
+        if self.gemini_429_cooldown_seconds <= 0:
+            return
+        self._gemini_cooldown_until = time.monotonic() + self.gemini_429_cooldown_seconds
+        logger.warning("Gemini rate-limit cooldown activated for %.1f sec.", self.gemini_429_cooldown_seconds)
 
 
 def _build_description(
@@ -303,13 +348,15 @@ def _post_gemini_request(
                 )
             else:
                 response = client.post(path, headers=headers, json=body)
-            if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+            if response.status_code in {500, 502, 503, 504} and attempt < 2:
                 time.sleep(1 + attempt)
                 continue
             response.raise_for_status()
             return response
         except httpx.HTTPError as exc:
             last_error = exc
+            if _is_rate_limited_error(exc):
+                raise
             if attempt < 2:
                 time.sleep(1 + attempt)
                 continue
@@ -317,6 +364,10 @@ def _post_gemini_request(
     if last_error is not None:
         raise last_error
     raise RuntimeError("Gemini request failed without response.")
+
+
+def _is_rate_limited_error(exc: Exception) -> bool:
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
 
 
 def _gemini_prompt(product: ProductData) -> str:

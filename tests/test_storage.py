@@ -298,6 +298,36 @@ def test_plan_posts_reuses_generated_platform_texts_across_platforms(store: Stor
     assert instagram_post.payload["instagram"]["caption"] == "Instagram текст\n\nАртикул WB: 999001\n\n#Wildberries"
 
 
+def test_plan_posts_reuses_planned_content_snapshot_on_refresh(store: Store, monkeypatch) -> None:
+    calls = 0
+
+    class FakeGenerator:
+        def generate(self, product):
+            nonlocal calls
+            calls += 1
+            return GeneratedContent(
+                title=product.title,
+                description="Generated once",
+                cta="Look",
+                hashtags=["#Test"],
+                platform_texts={"pinterest": "Generated once"},
+            )
+
+    monkeypatch.setattr("wb_autoposter.storage.create_content_generator", lambda: FakeGenerator())
+    product = make_product(title="Snapshot product", description="Snapshot description.", price=1000)
+    store.upsert_products([product])
+
+    first = store.plan_posts(platform="pinterest", board_id="board-1")
+    second = store.plan_posts(platform="pinterest", board_id="board-1")
+
+    post = store.list_posts(platform="pinterest", status=PostStatus.PLANNED)[0]
+    assert first == {"planned": 1, "skipped_existing": 0, "skipped_ineligible": 0}
+    assert second == {"planned": 0, "skipped_existing": 1, "skipped_ineligible": 0}
+    assert calls == 1
+    assert post.payload["content_snapshot"]["title"] == "Snapshot product"
+    assert post.payload["pinterest"]["description"] == "Generated once"
+
+
 def test_build_tracked_link_keeps_original_link_without_tracking_params() -> None:
     assert build_tracked_link("https://example.com/item", 123, None) == "https://example.com/item"
 

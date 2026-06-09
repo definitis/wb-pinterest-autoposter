@@ -67,6 +67,8 @@ class Settings:
     zernio_instagram_content_type: str
     gemini_api_key: str | None
     gemini_model: str
+    gemini_request_interval_seconds: float
+    gemini_429_cooldown_seconds: float
     content_rules_path: Path | None
 
 
@@ -140,6 +142,14 @@ def load_settings() -> Settings:
         zernio_instagram_content_type=os.getenv("ZERNIO_INSTAGRAM_CONTENT_TYPE", "feed").strip() or "feed",
         gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash",
+        gemini_request_interval_seconds=_parse_non_negative_float(
+            os.getenv("GEMINI_REQUEST_INTERVAL_SECONDS"),
+            default=6.0,
+        ),
+        gemini_429_cooldown_seconds=_parse_non_negative_float(
+            os.getenv("GEMINI_429_COOLDOWN_SECONDS"),
+            default=60.0,
+        ),
         content_rules_path=Path(os.getenv("CONTENT_RULES_PATH")) if os.getenv("CONTENT_RULES_PATH") else None,
     )
 
@@ -171,6 +181,15 @@ def _parse_optional_positive_int(value: str | None) -> int | None:
     parsed = int(value)
     if parsed < 1:
         raise ValueError("Expected a positive integer.")
+    return parsed
+
+
+def _parse_non_negative_float(value: str | None, *, default: float) -> float:
+    if value is None or value == "":
+        return default
+    parsed = float(value)
+    if parsed < 0:
+        raise ValueError("Expected a non-negative number.")
     return parsed
 
 

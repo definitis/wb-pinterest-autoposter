@@ -228,3 +228,26 @@ def test_content_generator_falls_back_when_gemini_text_uses_cliche() -> None:
     assert content.platform_texts is not None
     assert "Успейте" not in content.platform_texts["vk"]
     assert "Мягкие варежки" in content.platform_texts["vk"]
+
+
+def test_content_generator_cools_down_after_gemini_rate_limit() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(429, json={"error": {"message": "rate limited"}})
+
+    generator = TemplateContentGenerator(
+        gemini_api_key="gemini-key",
+        gemini_model="gemini-test",
+        gemini_429_cooldown_seconds=60,
+        client=httpx.Client(base_url="https://generativelanguage.googleapis.com", transport=httpx.MockTransport(handler)),
+    )
+
+    product = make_product(title="Test product", description="Product description.")
+    first = generator.generate(product)
+    second = generator.generate(product.model_copy(update={"nm_id": product.nm_id + 1}))
+
+    assert len(requests) == 1
+    assert first.platform_texts is not None
+    assert second.platform_texts is not None

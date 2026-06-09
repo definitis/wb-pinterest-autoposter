@@ -382,6 +382,8 @@ Remove-Item out\app.sqlite3
 ```env
 GEMINI_API_KEY=your_google_ai_studio_key
 GEMINI_MODEL=gemini-2.5-flash
+GEMINI_REQUEST_INTERVAL_SECONDS=6
+GEMINI_429_COOLDOWN_SECONDS=60
 CONTENT_RULES_PATH=config/content_rules.example.json
 ```
 
@@ -398,6 +400,8 @@ CONTENT_RULES_PATH=config/content_rules.example.json
 Это экономит лимиты бесплатного API: не нужно делать отдельный запрос для VK, отдельный для Instagram и отдельный для Pinterest. Если сначала планируется Pinterest, а потом Instagram/VK для того же товара, уже сохраненный `generated_content.platform_texts` переиспользуется из payload.
 
 Если `GEMINI_API_KEY` не задан или Gemini вернул невалидный JSON, пайплайн не падает. В лог пишется, что использован fallback, а тексты собираются локальными шаблонами из названия, описания, характеристик и ссылки.
+
+Чтобы не ловить `429 Too Many Requests`, генератор не отправляет запросы чаще, чем `GEMINI_REQUEST_INTERVAL_SECONDS`, а после ответа 429 включает cooldown на `GEMINI_429_COOLDOWN_SECONDS`. Один запрос по-прежнему возвращает тексты сразу для VK, Instagram и Pinterest; throttling работает между разными товарами, а не между площадками.
 
 Правила текста можно менять без правки кода через `CONTENT_RULES_PATH`. Пример лежит в `config/content_rules.example.json`: туда добавляются запретные фразы, generic marketplace-бренды вроде `wildberries/wb/вб`, SEO stopwords и заблокированные хэштеги. Эти правила используются при валидации ответа Gemini, fallback-текстах, SEO-ключах и чистке фразы вида `Бренд: Wildberries`.
 
