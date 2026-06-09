@@ -34,6 +34,23 @@ WB seller page
 -> sync social metrics from Zernio
 ```
 
+```mermaid
+flowchart LR
+    A["WB seller page"] --> B["Scan newest products"]
+    B --> C["SQLite products"]
+    C --> D["Anti-duplicate planning"]
+    D --> E["Gemini content generation or fallback"]
+    E --> F["Platform queue"]
+    F --> G["VK browser automation"]
+    F --> H["Pinterest via Zernio"]
+    F --> I["Instagram via Zernio"]
+    G --> J["Post status and external_id"]
+    H --> J
+    I --> J
+    J --> K["Zernio metrics sync"]
+    K --> L["CLI report and local dashboard"]
+```
+
 Один товар публикуется максимум один раз в каждую площадку. Один и тот же товар может иметь отдельные посты VK, Pinterest и Instagram.
 
 Для Instagram ссылка на WB не вставляется как основной CTA, потому что в обычном caption она не работает как нормальная кликабельная ссылка. Вместо этого добавляется `Артикул WB: <nmID>`. Для Pinterest WB-ссылка передается как destination link пина.
@@ -52,6 +69,14 @@ python -m playwright install chromium
 ```powershell
 python -m pytest
 ```
+
+Быстрая проверка перед сдачей:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\check_delivery.ps1
+```
+
+Подробный сценарий приемки лежит в `DELIVERY.md`.
 
 Скопировать env:
 
