@@ -888,15 +888,23 @@ python -m wb_autoposter.cli sync-metrics --platform all --limit 50
 python -m wb_autoposter.cli metrics-report --platform all --limit 20
 ```
 
+Если нужен полный прогон со всеми соцсетями, перед первым VK-постингом один раз сохраняется VK browser session:
+
+```powershell
+python -m wb_autoposter.cli vk-browser-login --start-url "https://vk.com/club239286699" --no-headless
+python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/..." --scan-limit 100 --vk --vk-browser --pinterest --instagram --pinterest-zernio --no-dry-run --vk-limit 1 --pinterest-limit 1 --instagram-limit 1 --headless --no-manual-ready
+```
+
 Для регулярного запуска на Windows есть готовые скрипты:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_social_cycle.ps1 -SellerUrl "https://www.wildberries.ru/seller/..." -RealPublish
+powershell -ExecutionPolicy Bypass -File scripts\run_social_cycle.ps1 -SellerUrl "https://www.wildberries.ru/seller/..." -RealPublish -IncludeVk
 powershell -ExecutionPolicy Bypass -File scripts\sync_metrics.ps1
 powershell -ExecutionPolicy Bypass -File scripts\install_windows_tasks.ps1 -SellerUrl "https://www.wildberries.ru/seller/..." -RealPublish -Force
 ```
 
-`scripts\run_social_cycle.ps1` без `-RealPublish` запускает dry-run. Для Linux/macOS пример cron лежит в `scripts/cron.example`.
+`scripts\run_social_cycle.ps1` без `-RealPublish` запускает dry-run. VK в этом скрипте выключен по умолчанию и включается флагом `-IncludeVk`; перед этим должен существовать `out\vk_browser_state.json`. Для Linux/macOS пример cron лежит в `scripts/cron.example`.
 
 ## Roadmap
 
