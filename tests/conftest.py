@@ -17,3 +17,8 @@ def store(tmp_path: Path) -> Store:
     db = Store(tmp_path / "app.sqlite3")
     db.init_db()
     return db
+
+
+@pytest.fixture(autouse=True)
+def disable_real_gemini_calls(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "")

@@ -89,7 +89,7 @@ def test_content_generator_uses_brand_from_title_when_wb_brand_is_generic() -> N
 
 
 def test_generate_social_texts_uses_fallback_without_gemini_key(monkeypatch) -> None:
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "")
     product = ProductData(
         title="Шапка женская вязаная",
         description="Теплая шапка с отворотом для прохладной погоды.",

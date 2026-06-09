@@ -4,6 +4,7 @@ import html
 import json
 import logging
 import re
+import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -48,23 +49,12 @@ def generate_social_texts(product: ProductData) -> dict[str, str]:
 
     logger.info("Gemini content generation started for product title=%r.", product.title)
     try:
-        response = httpx.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": api_key,
-            },
-            json={
-                "contents": [{"role": "user", "parts": [{"text": _gemini_prompt(product)}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "temperature": 0.7,
-                    "maxOutputTokens": 700,
-                },
-            },
-            timeout=30,
+        response = _post_gemini_request(
+            model,
+            api_key,
+            _gemini_request_body(product),
+            client=None,
         )
-        response.raise_for_status()
         result = _parse_gemini_social_texts(response.json())
         logger.info("Gemini content generation succeeded for product title=%r.", product.title)
         return result
@@ -144,25 +134,19 @@ class TemplateContentGenerator:
         logger.info("Gemini content generation started for product nmID=%s.", product.nm_id)
         try:
             if self.client is None:
-                response = httpx.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent",
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-goog-api-key": self.gemini_api_key,
-                    },
-                    json=_gemini_request_body(product_data),
-                    timeout=30,
+                response = _post_gemini_request(
+                    self.gemini_model,
+                    self.gemini_api_key,
+                    _gemini_request_body(product_data),
+                    client=None,
                 )
             else:
-                response = self.client.post(
-                    f"/v1beta/models/{self.gemini_model}:generateContent",
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-goog-api-key": self.gemini_api_key,
-                    },
-                    json=_gemini_request_body(product_data),
+                response = _post_gemini_request(
+                    self.gemini_model,
+                    self.gemini_api_key,
+                    _gemini_request_body(product_data),
+                    client=self.client,
                 )
-            response.raise_for_status()
             result = _parse_gemini_social_texts(response.json())
             logger.info("Gemini content generation succeeded for product nmID=%s.", product.nm_id)
             return result
@@ -203,10 +187,62 @@ def _gemini_request_body(product: ProductData) -> dict[str, Any]:
         "contents": [{"role": "user", "parts": [{"text": _gemini_prompt(product)}]}],
         "generationConfig": {
             "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "object",
+                "properties": {
+                    "vk": {"type": "string"},
+                    "instagram": {"type": "string"},
+                    "pinterest": {"type": "string"},
+                },
+                "required": ["vk", "instagram", "pinterest"],
+            },
+            "thinkingConfig": {
+                "thinkingBudget": 0,
+            },
             "temperature": 0.7,
-            "maxOutputTokens": 700,
+            "maxOutputTokens": 1200,
         },
     }
+
+
+def _post_gemini_request(
+    model: str,
+    api_key: str,
+    body: dict[str, Any],
+    *,
+    client: httpx.Client | None,
+) -> httpx.Response:
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+    path = f"/v1beta/models/{model}:generateContent"
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            if client is None:
+                response = httpx.post(
+                    f"https://generativelanguage.googleapis.com{path}",
+                    headers=headers,
+                    json=body,
+                    timeout=30,
+                )
+            else:
+                response = client.post(path, headers=headers, json=body)
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                time.sleep(1 + attempt)
+                continue
+            response.raise_for_status()
+            return response
+        except httpx.HTTPError as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(1 + attempt)
+                continue
+            raise
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Gemini request failed without response.")
 
 
 def _gemini_prompt(product: ProductData) -> str:
