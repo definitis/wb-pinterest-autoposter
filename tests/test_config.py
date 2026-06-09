@@ -85,6 +85,16 @@ def test_load_settings_reads_zernio_settings(monkeypatch) -> None:
     assert settings.instagram_post_limit_per_run == 2
 
 
+def test_load_settings_reads_gemini_settings(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-token")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-test")
+
+    settings = load_settings()
+
+    assert settings.gemini_api_key == "gemini-token"
+    assert settings.gemini_model == "gemini-test"
+
+
 def test_load_settings_reads_wb_public_limits(monkeypatch) -> None:
     monkeypatch.setenv("WB_PUBLIC_QUERY", "hm")
     monkeypatch.setenv("WB_PUBLIC_BASELINE_LIMIT", "500")

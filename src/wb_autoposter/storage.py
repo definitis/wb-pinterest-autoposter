@@ -12,7 +12,7 @@ from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, Uniqu
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from wb_autoposter.content import GeneratedContent, TemplateContentGenerator
+from wb_autoposter.content import GeneratedContent, TemplateContentGenerator, create_content_generator
 from wb_autoposter.models import PlannedPost, PostStatus, Product
 
 
@@ -239,7 +239,7 @@ class Store:
         skipped_existing = 0
         skipped_ineligible = 0
         skipped_baseline = 0
-        content_generator = TemplateContentGenerator()
+        content_generator = create_content_generator()
 
         with self.session_factory.begin() as session:
             baseline_at = None
@@ -266,6 +266,7 @@ class Store:
                     if existing.status == PostStatus.PLANNED.value:
                         self._refresh_planned_post(
                             existing,
+                            session,
                             platform,
                             product,
                             board_id,
@@ -282,7 +283,7 @@ class Store:
                     skipped_ineligible += 1
                     continue
 
-                content = content_generator.generate(product)
+                content = _content_from_existing_post(session, product.nm_id) or content_generator.generate(product)
 
                 record = (
                     PostRecord(
@@ -331,7 +332,7 @@ class Store:
         retried = 0
         skipped_ineligible = 0
         skipped_missing_product = 0
-        content_generator = TemplateContentGenerator()
+        content_generator = create_content_generator()
 
         with self.session_factory.begin() as session:
             records = session.scalars(
@@ -351,7 +352,7 @@ class Store:
                     skipped_ineligible += 1
                     continue
 
-                content = content_generator.generate(product)
+                content = _content_from_existing_post(session, product.nm_id) or content_generator.generate(product)
                 record.status = PostStatus.PLANNED.value
                 record.payload_json = json.dumps(
                     build_social_payload(
@@ -394,7 +395,7 @@ class Store:
         recovered = 0
         skipped_ineligible = 0
         skipped_missing_product = 0
-        content_generator = TemplateContentGenerator()
+        content_generator = create_content_generator()
 
         with self.session_factory.begin() as session:
             records = session.scalars(
@@ -422,7 +423,7 @@ class Store:
                     skipped_ineligible += 1
                     continue
 
-                content = content_generator.generate(product)
+                content = _content_from_existing_post(session, product.nm_id) or content_generator.generate(product)
                 record.status = PostStatus.PLANNED.value
                 record.payload_json = json.dumps(
                     build_social_payload(
@@ -527,6 +528,7 @@ class Store:
     @staticmethod
     def _refresh_planned_post(
         record: PostRecord,
+        session: Session,
         platform: str,
         product: Product,
         board_id: str | None,
@@ -558,6 +560,44 @@ class Store:
         record.error = None
 
 
+def _content_from_existing_post(session: Session, nm_id: int) -> GeneratedContent | None:
+    records = session.scalars(
+        select(PostRecord)
+        .where(PostRecord.product_nm_id == nm_id)
+        .order_by(PostRecord.created_at, PostRecord.id)
+    ).all()
+    for record in records:
+        try:
+            payload = json.loads(record.payload_json)
+        except json.JSONDecodeError:
+            continue
+        generated = payload.get("generated_content")
+        if not isinstance(generated, dict):
+            continue
+        title = generated.get("title")
+        description = generated.get("description")
+        cta = generated.get("cta")
+        hashtags = generated.get("hashtags")
+        if not isinstance(title, str) or not isinstance(description, str) or not isinstance(cta, str):
+            continue
+        if not isinstance(hashtags, list) or not all(isinstance(tag, str) for tag in hashtags):
+            continue
+        platform_texts = generated.get("platform_texts")
+        if platform_texts is not None:
+            if not isinstance(platform_texts, dict):
+                platform_texts = None
+            else:
+                platform_texts = {str(key): str(value) for key, value in platform_texts.items() if isinstance(value, str)}
+        return GeneratedContent(
+            title=title,
+            description=description,
+            cta=cta,
+            hashtags=hashtags,
+            platform_texts=platform_texts,
+        )
+    return None
+
+
 def is_publishable(product: Product) -> bool:
     return (
         bool(product.title.strip())
@@ -587,7 +627,7 @@ def build_pinterest_payload(
         "generated_content": generated_content.to_dict(),
         "pinterest": {
             "title": generated_content.title,
-            "description": generated_content.description,
+            "description": _platform_text(generated_content, "pinterest", generated_content.description),
             "board_id": board_id,
             "link": build_tracked_link(product.url.strip(), product.nm_id, tracking_params),
             "media_source": {
@@ -687,11 +727,16 @@ def build_social_payload(
 
 
 def _build_vk_message(_product: Product, content: GeneratedContent, link: str) -> str:
-    parts = [content.description, f"Ссылка на Вайлдберриз: {link}"]
+    parts = [_platform_text(content, "vk", content.description), f"Ссылка на Вайлдберриз: {link}"]
     return "\n\n".join(part for part in parts if part.strip())
 
 
 def _build_instagram_caption(product: Product, content: GeneratedContent) -> str:
+    instagram_text = _platform_text(content, "instagram", "")
+    if instagram_text:
+        tags = " ".join(content.hashtags)
+        return "\n\n".join(part for part in [instagram_text, tags] if part.strip())
+
     title = content.title.rstrip(".")
     fact = _short_caption_fact(product.description)
     price = _format_caption_price(product.price)
@@ -710,6 +755,14 @@ def _build_instagram_caption(product: Product, content: GeneratedContent) -> str
 
     body = "\n".join(line for line in lines if line.strip())
     return "\n\n".join(part for part in [body, tags] if part.strip())
+
+
+def _platform_text(content: GeneratedContent, platform: str, fallback: str) -> str:
+    if content.platform_texts:
+        value = content.platform_texts.get(platform)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return fallback
 
 
 def _format_caption_price(price: float | None) -> str:

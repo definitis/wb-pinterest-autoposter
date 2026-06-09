@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import html
+import json
+import logging
 import re
 from dataclasses import asdict, dataclass
+from typing import Any
 
+import httpx
+
+from wb_autoposter.config import load_settings
 from wb_autoposter.models import Product
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -13,13 +21,76 @@ class GeneratedContent:
     description: str
     cta: str
     hashtags: list[str]
+    platform_texts: dict[str, str] | None = None
 
-    def to_dict(self) -> dict[str, str | list[str]]:
+    def to_dict(self) -> dict[str, str | list[str] | dict[str, str] | None]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ProductData:
+    title: str
+    description: str = ""
+    features: str = ""
+    url: str = ""
+
+
+def generate_social_texts(product: ProductData) -> dict[str, str]:
+    """Generate VK/Instagram/Pinterest text in one Gemini request, with template fallback."""
+
+    settings = load_settings()
+    api_key = settings.gemini_api_key
+    model = settings.gemini_model
+    fallback = _fallback_social_texts(product)
+    if not api_key:
+        logger.info("Gemini content generation skipped: GEMINI_API_KEY is not configured; using fallback.")
+        return fallback
+
+    logger.info("Gemini content generation started for product title=%r.", product.title)
+    try:
+        response = httpx.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+            json={
+                "contents": [{"role": "user", "parts": [{"text": _gemini_prompt(product)}]}],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "temperature": 0.7,
+                    "maxOutputTokens": 700,
+                },
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = _parse_gemini_social_texts(response.json())
+        logger.info("Gemini content generation succeeded for product title=%r.", product.title)
+        return result
+    except Exception as exc:
+        logger.warning("Gemini content generation fallback used: %s", exc)
+        return fallback
+
+
+def create_content_generator() -> "TemplateContentGenerator":
+    settings = load_settings()
+    return TemplateContentGenerator(gemini_api_key=settings.gemini_api_key, gemini_model=settings.gemini_model)
 
 
 class TemplateContentGenerator:
     """Deterministic Russian social copy generated only from the WB card data."""
+
+    def __init__(
+        self,
+        *,
+        gemini_api_key: str | None = None,
+        gemini_model: str = "gemini-2.5-flash",
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.gemini_api_key = gemini_api_key
+        self.gemini_model = gemini_model
+        self.client = client
 
     def generate(self, product: Product) -> GeneratedContent:
         brand = _clean_text(product.brand)
@@ -41,13 +112,63 @@ class TemplateContentGenerator:
         tag_line = " ".join(hashtags)
         body_limit = min(430, max(120, 498 - len(tag_line)))
         description = f"{_limit(description_body, body_limit)}\n\n{tag_line}"
+        fallback_texts = _fallback_social_texts(
+            ProductData(
+                title=title,
+                description=card_fact or product.description,
+                features=_product_features(product),
+                url=product.url,
+            )
+        )
+        platform_texts = self._generate_platform_texts(product, title=title, description=card_fact)
 
         return GeneratedContent(
             title=title,
             description=description,
             cta=cta,
             hashtags=hashtags,
+            platform_texts=platform_texts or fallback_texts,
         )
+
+    def _generate_platform_texts(self, product: Product, *, title: str, description: str) -> dict[str, str] | None:
+        if not self.gemini_api_key:
+            logger.info("Gemini content generation skipped: GEMINI_API_KEY is not configured; using fallback.")
+            return None
+
+        product_data = ProductData(
+            title=title,
+            description=description or product.description,
+            features=_product_features(product),
+            url=product.url,
+        )
+        logger.info("Gemini content generation started for product nmID=%s.", product.nm_id)
+        try:
+            if self.client is None:
+                response = httpx.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent",
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": self.gemini_api_key,
+                    },
+                    json=_gemini_request_body(product_data),
+                    timeout=30,
+                )
+            else:
+                response = self.client.post(
+                    f"/v1beta/models/{self.gemini_model}:generateContent",
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": self.gemini_api_key,
+                    },
+                    json=_gemini_request_body(product_data),
+                )
+            response.raise_for_status()
+            result = _parse_gemini_social_texts(response.json())
+            logger.info("Gemini content generation succeeded for product nmID=%s.", product.nm_id)
+            return result
+        except Exception as exc:
+            logger.warning("Gemini content generation fallback used for product nmID=%s: %s", product.nm_id, exc)
+            return None
 
 
 def _build_description(
@@ -75,6 +196,134 @@ def _build_description(
         parts = [intro, fact_sentence, price_sentence, cta + "."]
 
     return _clean_text(" ".join(part for part in parts if part))
+
+
+def _gemini_request_body(product: ProductData) -> dict[str, Any]:
+    return {
+        "contents": [{"role": "user", "parts": [{"text": _gemini_prompt(product)}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.7,
+            "maxOutputTokens": 700,
+        },
+    }
+
+
+def _gemini_prompt(product: ProductData) -> str:
+    return f"""Ты маркетолог для e-commerce.
+
+На основе карточки товара Wildberries создай короткие тексты для публикации в соцсетях.
+
+Верни строго JSON без markdown:
+{{
+"vk": "короткий текст для VK",
+"instagram": "короткий текст для Instagram",
+"pinterest": "короткий текст для Pinterest"
+}}
+
+Требования:
+
+- каждый текст 2-4 предложения
+- простой живой русский язык
+- не выдумывай характеристик, которых нет во входных данных
+- без чрезмерных обещаний
+- без канцелярита
+- добавь мягкий призыв посмотреть товар
+- адаптируй стиль под площадку
+
+Для VK:
+
+- чуть более информативно
+- акцент на пользу товара
+
+Для Instagram:
+
+- более живо и визуально
+- можно чуть эмоциональнее, но без кринжа
+
+Для Pinterest:
+
+- коротко
+- акцент на идею, стиль, применение или визуальную привлекательность
+
+Данные товара:
+Название: {product.title}
+Описание: {product.description}
+Характеристики: {product.features}
+Ссылка: {product.url}
+"""
+
+
+def _parse_gemini_social_texts(body: dict[str, Any]) -> dict[str, str]:
+    text = _extract_gemini_text(body)
+    parsed = json.loads(_strip_json_markdown(text))
+    if not isinstance(parsed, dict):
+        raise ValueError("Gemini response JSON is not an object.")
+
+    result: dict[str, str] = {}
+    for platform in ("vk", "instagram", "pinterest"):
+        value = parsed.get(platform)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Gemini response missing text for {platform}.")
+        result[platform] = _limit_platform_text(value)
+    return result
+
+
+def _extract_gemini_text(body: dict[str, Any]) -> str:
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise ValueError("Gemini response does not include candidates.")
+    parts = ((candidates[0].get("content") or {}).get("parts") if isinstance(candidates[0], dict) else None) or []
+    texts = [part.get("text") for part in parts if isinstance(part, dict) and isinstance(part.get("text"), str)]
+    text = "\n".join(texts).strip()
+    if not text:
+        raise ValueError("Gemini response does not include text.")
+    return text
+
+
+def _strip_json_markdown(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    return cleaned.strip()
+
+
+def _limit_platform_text(text: str) -> str:
+    cleaned = _clean_text(text)
+    return _limit(cleaned, 700)
+
+
+def _fallback_social_texts(product: ProductData) -> dict[str, str]:
+    title = _sentence(_localize_title(product.title)).rstrip(".")
+    fact = _extract_card_fact(product.description)
+    features = _clean_text(product.features.replace("Бренд: ", ""))
+    link = product.url.strip()
+
+    features_sentence = _sentence(features) if features else ""
+    vk_parts = [title + ".", fact, features_sentence, "Посмотрите карточку товара на Wildberries."]
+    instagram_parts = [title + ".", fact, features_sentence, "Можно найти на Wildberries по ссылке в карточке товара."]
+    pinterest_parts = [title + ".", fact, features_sentence, "Идея для подборки с новинками Wildberries."]
+    if link:
+        vk_parts.append(link)
+        pinterest_parts.append(link)
+
+    return {
+        "vk": _clean_text(" ".join(part for part in vk_parts if part)),
+        "instagram": _clean_text(" ".join(part for part in instagram_parts if part)),
+        "pinterest": _clean_text(" ".join(part for part in pinterest_parts if part)),
+    }
+
+
+def _product_features(product: Product) -> str:
+    values = []
+    if product.brand:
+        values.append(f"Бренд: {product.brand}")
+    if product.price is not None:
+        values.append(f"Цена: {_format_price(product.price)}")
+    if product.stock > 0:
+        values.append(f"Остаток: {product.stock}")
+    return "; ".join(values)
 
 
 def _extract_card_fact(description: str) -> str:

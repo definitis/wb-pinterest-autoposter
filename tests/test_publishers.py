@@ -233,7 +233,7 @@ def test_zernio_instagram_publisher_posts_to_zernio(tmp_path: Path) -> None:
     assert requests[0].url.path == "/api/v1/posts"
     assert requests[0].headers["Authorization"] == "Bearer token"
     assert requests[0].headers["Content-Type"] == "application/json; charset=utf-8"
-    assert "Артикул WB".encode("utf-8") in requests[0].content
+    assert "Wildberries".encode("utf-8") in requests[0].content
     request_json = json.loads(requests[0].content)
     assert request_json["platforms"][0]["platform"] == "instagram"
     assert request_json["platforms"][0]["accountId"] == "ig-1"

@@ -8,6 +8,7 @@ import pytest
 
 from wb_autoposter.adapters.fake_wb import FakeWBSource
 from wb_autoposter.models import PostStatus
+from wb_autoposter.content import GeneratedContent
 from wb_autoposter.storage import (
     PostRecord,
     Store,
@@ -188,8 +189,6 @@ def test_build_instagram_payload_uses_caption_link_and_photo() -> None:
     instagram_payload = payload["instagram"]
     assert instagram_payload["image_url"] == product.photos[0]
     assert "Шапка женская вязаная" in instagram_payload["caption"]
-    assert "Цена: 1 000 руб." in instagram_payload["caption"]
-    assert "Артикул WB: 123" in instagram_payload["caption"]
     assert "Перейти к товару" not in instagram_payload["caption"]
     assert "Бренд:" not in instagram_payload["caption"]
     assert product.url not in instagram_payload["caption"]
@@ -227,7 +226,41 @@ def test_plan_posts_can_create_instagram_posts(store: Store) -> None:
     assert result == {"planned": 1, "skipped_existing": 0, "skipped_ineligible": 0}
     post = store.list_posts(platform="instagram", status=PostStatus.PLANNED)[0]
     assert post.payload["instagram"]["image_url"] == product.photos[0]
-    assert "Артикул WB" in post.payload["instagram"]["caption"]
+    assert "Шапка женская вязаная" in post.payload["instagram"]["caption"]
+    assert "Wildberries" in post.payload["instagram"]["caption"]
+
+
+def test_plan_posts_reuses_generated_platform_texts_across_platforms(store: Store, monkeypatch) -> None:
+    calls = 0
+
+    class FakeGenerator:
+        def generate(self, product):
+            nonlocal calls
+            calls += 1
+            return GeneratedContent(
+                title="Тестовый товар",
+                description="Общее описание",
+                cta="Смотреть",
+                hashtags=["#Wildberries"],
+                platform_texts={
+                    "vk": "VK текст",
+                    "instagram": "Instagram текст",
+                    "pinterest": "Pinterest текст",
+                },
+            )
+
+    monkeypatch.setattr("wb_autoposter.storage.create_content_generator", lambda: FakeGenerator())
+    product = make_product()
+    store.upsert_products([product])
+
+    store.plan_posts(platform="pinterest", board_id="board-1")
+    store.plan_posts(platform="instagram")
+
+    pinterest_post = store.list_posts(platform="pinterest", status=PostStatus.PLANNED)[0]
+    instagram_post = store.list_posts(platform="instagram", status=PostStatus.PLANNED)[0]
+    assert calls == 1
+    assert pinterest_post.payload["pinterest"]["description"] == "Pinterest текст"
+    assert instagram_post.payload["instagram"]["caption"] == "Instagram текст\n\n#Wildberries"
 
 
 def test_build_tracked_link_keeps_original_link_without_tracking_params() -> None:

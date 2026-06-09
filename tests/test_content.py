@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from wb_autoposter.content import TemplateContentGenerator
+import httpx
+
+from wb_autoposter.content import ProductData, TemplateContentGenerator, generate_social_texts
 
 from helpers import make_product
 
@@ -84,3 +86,60 @@ def test_content_generator_uses_brand_from_title_when_wb_brand_is_generic() -> N
 
     assert "#Mothercare" in content.hashtags
     assert content.hashtags.count("#Wildberries") == 1
+
+
+def test_generate_social_texts_uses_fallback_without_gemini_key(monkeypatch) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    product = ProductData(
+        title="Шапка женская вязаная",
+        description="Теплая шапка с отворотом для прохладной погоды.",
+        url="https://www.wildberries.ru/catalog/123/detail.aspx",
+    )
+
+    result = generate_social_texts(product)
+
+    assert set(result) == {"vk", "instagram", "pinterest"}
+    assert "Шапка женская вязаная" in result["vk"]
+    assert "Wildberries" in result["pinterest"]
+
+
+def test_content_generator_uses_one_gemini_response_for_all_platforms() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": (
+                                        '{"vk":"VK текст. Посмотрите товар.",'
+                                        '"instagram":"Instagram текст. Посмотрите товар.",'
+                                        '"pinterest":"Pinterest текст. Посмотрите товар."}'
+                                    )
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+
+    generator = TemplateContentGenerator(
+        gemini_api_key="gemini-key",
+        gemini_model="gemini-test",
+        client=httpx.Client(base_url="https://generativelanguage.googleapis.com", transport=httpx.MockTransport(handler)),
+    )
+
+    content = generator.generate(make_product())
+
+    assert len(requests) == 1
+    assert content.platform_texts == {
+        "vk": "VK текст. Посмотрите товар.",
+        "instagram": "Instagram текст. Посмотрите товар.",
+        "pinterest": "Pinterest текст. Посмотрите товар.",
+    }

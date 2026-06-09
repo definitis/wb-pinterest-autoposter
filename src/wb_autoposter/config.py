@@ -65,6 +65,8 @@ class Settings:
     zernio_pinterest_board_id: str | None
     zernio_instagram_account_id: str | None
     zernio_instagram_content_type: str
+    gemini_api_key: str | None
+    gemini_model: str
 
 
 def load_settings() -> Settings:
@@ -135,6 +137,8 @@ def load_settings() -> Settings:
         zernio_pinterest_board_id=os.getenv("ZERNIO_PINTEREST_BOARD_ID") or None,
         zernio_instagram_account_id=os.getenv("ZERNIO_INSTAGRAM_ACCOUNT_ID") or None,
         zernio_instagram_content_type=os.getenv("ZERNIO_INSTAGRAM_CONTENT_TYPE", "feed").strip() or "feed",
+        gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash",
     )
 
 
