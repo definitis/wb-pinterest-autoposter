@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from io import BytesIO
 from datetime import UTC, datetime
@@ -48,6 +49,7 @@ class ZernioPublisher:
         request_body = build_zernio_pinterest_post(payload, account_id=account_id, board_id=board_id)
         body = self._post_with_utf8("pinterest", post_id, request_body)
         zernio_post_id = _extract_post_id(body)
+        body = self._wait_for_final_status(zernio_post_id, body)
 
         payload_path = self._write_artifact(
             post_id,
@@ -69,6 +71,7 @@ class ZernioPublisher:
         self._prepare_instagram_media(request_body, post_id=post_id, nm_id=payload.get("product_nm_id"))
         body = self._post_with_utf8("instagram", post_id, request_body)
         zernio_post_id = _extract_post_id(body)
+        body = self._wait_for_final_status(zernio_post_id, body)
 
         payload_path = self._write_artifact(
             post_id,
@@ -107,6 +110,23 @@ class ZernioPublisher:
         body = response.json()
         _raise_for_zernio_publish_failure(body)
         return body
+
+    def _wait_for_final_status(self, zernio_post_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        if _is_zernio_publish_success(body):
+            return body
+
+        latest = body
+        for _attempt in range(12):
+            time.sleep(5)
+            response = self.client.get(f"/posts/{zernio_post_id}", headers=self._headers())
+            if response.status_code >= 400:
+                raise ValueError(f"Zernio status check error {response.status_code}: {_short_response_text(response)}")
+            latest = response.json()
+            _raise_for_zernio_publish_failure(latest)
+            if _is_zernio_publish_success(latest):
+                return latest
+
+        raise ValueError(f"Zernio publishing did not reach published status for post {zernio_post_id}.")
 
     def _prepare_instagram_media(self, request_body: dict[str, Any], *, post_id: int, nm_id: object) -> None:
         media_items = request_body.get("mediaItems")
@@ -354,6 +374,20 @@ def _raise_for_zernio_publish_failure(body: dict[str, Any]) -> None:
     if post_status == "failed" or platform_errors:
         message = "; ".join(platform_errors) or str(body.get("error") or body.get("message") or "publishing failed")
         raise ValueError(f"Zernio publishing failed: {message}")
+
+
+def _is_zernio_publish_success(body: dict[str, Any]) -> bool:
+    post = body.get("post")
+    if not isinstance(post, dict):
+        return False
+    if str(post.get("status") or "").lower() == "published":
+        return True
+    platform_statuses = [
+        str(platform.get("status") or "").lower()
+        for platform in post.get("platforms") or []
+        if isinstance(platform, dict)
+    ]
+    return bool(platform_statuses) and all(status == "published" for status in platform_statuses)
 
 
 def _request_id(platform: str, post_id: int, request_body: dict[str, Any]) -> str:

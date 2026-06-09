@@ -174,7 +174,7 @@ def test_zernio_pinterest_publisher_posts_to_zernio(tmp_path: Path) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(201, json={"post": {"_id": "zp-123", "status": "publishing"}})
+        return httpx.Response(201, json={"post": {"_id": "zp-123", "status": "published"}})
 
     client = httpx.Client(
         base_url=ZernioPublisher.base_url,
@@ -212,7 +212,7 @@ def test_zernio_instagram_publisher_posts_to_zernio(tmp_path: Path) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(201, json={"post": {"_id": "zi-123", "status": "publishing"}})
+        return httpx.Response(201, json={"post": {"_id": "zi-123", "status": "published"}})
 
     client = httpx.Client(
         base_url=ZernioPublisher.base_url,
@@ -254,7 +254,7 @@ def test_zernio_instagram_publisher_uploads_webp_as_jpeg(tmp_path: Path) -> None
             )
         if request.url.host == "upload.zernio.test":
             return httpx.Response(200)
-        return httpx.Response(201, json={"post": {"_id": "zi-123", "status": "publishing"}})
+        return httpx.Response(201, json={"post": {"_id": "zi-123", "status": "published"}})
 
     image = Image.new("RGB", (8, 8), "white")
     image_bytes = BytesIO()
