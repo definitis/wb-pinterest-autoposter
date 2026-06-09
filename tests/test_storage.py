@@ -7,7 +7,7 @@ from time import sleep
 import pytest
 
 from wb_autoposter.adapters.fake_wb import FakeWBSource
-from wb_autoposter.models import PostStatus
+from wb_autoposter.models import PostStatus, SocialPostMetrics
 from wb_autoposter.content import GeneratedContent
 from wb_autoposter.storage import (
     PostRecord,
@@ -300,6 +300,50 @@ def test_plan_posts_reuses_generated_platform_texts_across_platforms(store: Stor
 
 def test_build_tracked_link_keeps_original_link_without_tracking_params() -> None:
     assert build_tracked_link("https://example.com/item", 123, None) == "https://example.com/item"
+
+
+def test_store_saves_latest_social_metrics(store: Store) -> None:
+    product = make_product(nm_id=123)
+    store.upsert_products([product])
+    store.plan_posts(platform="pinterest", board_id="board-1")
+    post = store.list_posts(platform="pinterest", status=PostStatus.PLANNED)[0]
+    store.update_post_result(post.id, PostStatus.PUBLISHED, "zp-123", None)
+
+    first = store.save_post_metrics(
+        SocialPostMetrics(
+            post_id=post.id,
+            product_nm_id=product.nm_id,
+            platform="pinterest",
+            external_id="zp-123",
+            captured_at=datetime(2026, 6, 9, tzinfo=UTC),
+            impressions=100,
+            clicks=4,
+            likes=2,
+            raw={"analytics": {"impressions": 100}},
+        )
+    )
+    second = store.save_post_metrics(
+        first.model_copy(
+            update={
+                "id": None,
+                "captured_at": datetime(2026, 6, 10, tzinfo=UTC),
+                "impressions": 150,
+                "clicks": 6,
+            }
+        )
+    )
+
+    latest = store.latest_post_metrics(platform="pinterest")
+    summary = store.metrics_summary(platform="pinterest")
+
+    assert first.id is not None
+    assert second.id is not None
+    assert len(latest) == 1
+    assert latest[0].impressions == 150
+    assert latest[0].clicks == 6
+    assert summary["posts_with_metrics"] == 1
+    assert summary["impressions"] == 150
+    assert summary["clicks"] == 6
 
 
 def test_planned_payload_refreshes_after_product_update(store: Store) -> None:

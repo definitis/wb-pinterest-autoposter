@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from wb_autoposter.content import GeneratedContent, TemplateContentGenerator, create_content_generator, sanitize_social_text
-from wb_autoposter.models import PlannedPost, PostStatus, Product
+from wb_autoposter.models import PlannedPost, PostStatus, Product, SocialPostMetrics
 
 
 class Base(DeclarativeBase):
@@ -61,6 +61,32 @@ class PostRecord(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PostMetricRecord(Base):
+    __tablename__ = "post_metrics"
+    __table_args__ = (
+        Index("ix_post_metrics_post_captured", "post_id", "captured_at"),
+        Index("ix_post_metrics_platform_captured", "platform", "captured_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), nullable=False)
+    product_nm_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    platform: Mapped[str] = mapped_column(String(64), nullable=False)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False, default="zernio")
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    impressions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reach: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    clicks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    likes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comments: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    saves: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shares: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    views: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    engagement: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
 
 class SyncStateRecord(Base):
@@ -459,6 +485,71 @@ class Store:
         with self.session_factory() as session:
             records = session.scalars(stmt).all()
             return [_record_to_post(record) for record in records]
+
+    def save_post_metrics(self, metrics: SocialPostMetrics) -> SocialPostMetrics:
+        with self.session_factory.begin() as session:
+            post = session.get(PostRecord, metrics.post_id)
+            if post is None:
+                raise ValueError(f"Post not found: {metrics.post_id}")
+            record = PostMetricRecord(
+                post_id=metrics.post_id,
+                product_nm_id=metrics.product_nm_id,
+                platform=metrics.platform,
+                external_id=metrics.external_id,
+                source=metrics.source,
+                captured_at=metrics.captured_at,
+                impressions=metrics.impressions,
+                reach=metrics.reach,
+                clicks=metrics.clicks,
+                likes=metrics.likes,
+                comments=metrics.comments,
+                saves=metrics.saves,
+                shares=metrics.shares,
+                views=metrics.views,
+                engagement=metrics.engagement,
+                raw_json=json.dumps(metrics.raw, ensure_ascii=False),
+            )
+            session.add(record)
+            session.flush()
+            return _record_to_metrics(record)
+
+    def latest_post_metrics(self, platform: str | None = None, limit: int | None = None) -> list[SocialPostMetrics]:
+        stmt = select(PostMetricRecord).order_by(PostMetricRecord.captured_at.desc(), PostMetricRecord.id.desc())
+        if platform is not None:
+            stmt = stmt.where(PostMetricRecord.platform == platform)
+
+        with self.session_factory() as session:
+            records = session.scalars(stmt).all()
+
+        latest_by_post: dict[int, SocialPostMetrics] = {}
+        for record in records:
+            if record.post_id in latest_by_post:
+                continue
+            latest_by_post[record.post_id] = _record_to_metrics(record)
+            if limit is not None and len(latest_by_post) >= limit:
+                break
+        return list(latest_by_post.values())
+
+    def metrics_summary(self, platform: str | None = None) -> dict[str, int]:
+        latest = self.latest_post_metrics(platform=platform)
+        totals = {
+            "posts_with_metrics": len(latest),
+            "impressions": 0,
+            "reach": 0,
+            "clicks": 0,
+            "likes": 0,
+            "comments": 0,
+            "saves": 0,
+            "shares": 0,
+            "views": 0,
+            "engagement": 0,
+        }
+        for metrics in latest:
+            for key in totals:
+                if key == "posts_with_metrics":
+                    continue
+                totals[key] += getattr(metrics, key) or 0
+        return totals
 
     def update_post_result(self, post_id: int, status: PostStatus, external_id: str | None, error: str | None) -> None:
         with self.session_factory.begin() as session:
@@ -870,6 +961,34 @@ def _record_to_post(record: PostRecord) -> PlannedPost:
         error=record.error,
         created_at=record.created_at,
         published_at=record.published_at,
+    )
+
+
+def _record_to_metrics(record: PostMetricRecord) -> SocialPostMetrics:
+    try:
+        raw = json.loads(record.raw_json)
+    except json.JSONDecodeError:
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return SocialPostMetrics(
+        id=record.id,
+        post_id=record.post_id,
+        product_nm_id=record.product_nm_id,
+        platform=record.platform,
+        external_id=record.external_id,
+        source=record.source,
+        captured_at=record.captured_at,
+        impressions=record.impressions,
+        reach=record.reach,
+        clicks=record.clicks,
+        likes=record.likes,
+        comments=record.comments,
+        saves=record.saves,
+        shares=record.shares,
+        views=record.views,
+        engagement=record.engagement,
+        raw=raw,
     )
 
 

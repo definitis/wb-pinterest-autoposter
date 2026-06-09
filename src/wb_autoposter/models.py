@@ -90,3 +90,25 @@ class PlannedPost(BaseModel):
     error: str | None = None
     created_at: datetime
     published_at: datetime | None = None
+
+
+class SocialPostMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int | None = None
+    post_id: int
+    product_nm_id: int
+    platform: str
+    external_id: str | None = None
+    source: str = "zernio"
+    captured_at: datetime
+    impressions: int | None = None
+    reach: int | None = None
+    clicks: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    saves: int | None = None
+    shares: int | None = None
+    views: int | None = None
+    engagement: int | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)

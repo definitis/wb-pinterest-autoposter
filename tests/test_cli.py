@@ -390,6 +390,60 @@ def test_publish_cli_can_use_zernio_instagram_publisher(
     assert published_posts[0].external_id == "zernio-ig-1"
 
 
+def test_sync_metrics_cli_fetches_zernio_metrics(
+    tmp_path: Path,
+    fixture_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeZernioPublisher:
+        def __init__(self, api_key: str) -> None:
+            self.api_key = api_key
+
+        def get_post_analytics(self, **kwargs: object) -> dict[str, object]:
+            assert kwargs["post_id"] == "zernio-1"
+            assert kwargs["platform"] == "pinterest"
+            assert kwargs["account_id"] == "acc-1"
+            return {
+                "analytics": {
+                    "impressions": 321,
+                    "reach": 250,
+                    "clicks": 12,
+                    "likes": 7,
+                    "saves": 3,
+                }
+            }
+
+    monkeypatch.setattr(cli_module, "ZernioPublisher", FakeZernioPublisher)
+    monkeypatch.setenv("ZERNIO_API_KEY", "token")
+    monkeypatch.setenv("ZERNIO_PINTEREST_ACCOUNT_ID", "acc-1")
+    db_path = tmp_path / "app.sqlite3"
+    store = Store(db_path)
+    store.init_db()
+    store.upsert_products([FakeWBSource(fixture_path).fetch_products()[0]])
+    store.plan_posts(platform="pinterest", board_id="demo-board")
+    post = store.list_posts(platform="pinterest", status=PostStatus.PLANNED)[0]
+    store.update_post_result(post.id, PostStatus.PUBLISHED, "zernio-1", None)
+
+    result = CliRunner().invoke(
+        app,
+        ["sync-metrics", "--platform", "pinterest", "--db-path", str(db_path)],
+    )
+    report = CliRunner().invoke(
+        app,
+        ["metrics-report", "--platform", "pinterest", "--db-path", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "synced=1" in result.output
+    latest = store.latest_post_metrics(platform="pinterest")
+    assert len(latest) == 1
+    assert latest[0].impressions == 321
+    assert latest[0].clicks == 12
+    assert report.exit_code == 0
+    assert "impressions=321" in report.output
+    assert "clicks=12" in report.output
+
+
 def test_failed_publish_does_not_leave_post_planned(tmp_path: Path, fixture_path: Path, monkeypatch) -> None:
     class FailingPublisher:
         def __init__(self, out_dir: Path) -> None:

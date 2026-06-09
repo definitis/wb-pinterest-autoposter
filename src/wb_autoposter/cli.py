@@ -10,7 +10,7 @@ from wb_autoposter.adapters.wb_browser import SOURCE_NAME as WB_BROWSER_SOURCE_N
 from wb_autoposter.adapters.wb_browser import collect_wb_seller_product_cards
 from wb_autoposter.adapters.wb_browser import collect_wb_seller_nm_ids
 from wb_autoposter.config import Settings, load_settings
-from wb_autoposter.models import PostStatus
+from wb_autoposter.models import PlannedPost, PostStatus, SocialPostMetrics
 from wb_autoposter.publishers import (
     InstagramApiPublisher,
     InstagramDryRunPublisher,
@@ -35,6 +35,7 @@ app = typer.Typer(help="WB новинки -> VK/Pinterest autoposter MVP.")
 APP_MODES = {"test", "real-ready"}
 SOURCES = {"fake", "wb-api", "wb-public"}
 PLATFORMS = {"instagram", "pinterest", "vk"}
+ZERNIO_METRICS_PLATFORMS = {"instagram", "pinterest"}
 
 
 def _resolve_source(settings: Settings, mode: str | None, source: str | None) -> tuple[str, str]:
@@ -182,6 +183,19 @@ def _publish_limit(settings: Settings, platform: str, override: int | None = Non
 def _validate_platform(platform: str) -> None:
     if platform not in PLATFORMS:
         raise typer.BadParameter("platform must be 'instagram', 'pinterest', or 'vk'.")
+
+
+def _validate_metrics_platform(platform: str) -> None:
+    if platform != "all" and platform not in ZERNIO_METRICS_PLATFORMS:
+        raise typer.BadParameter("platform must be 'all', 'instagram', or 'pinterest'.")
+
+
+def _zernio_account_id_for_metrics(settings: Settings, platform: str) -> str | None:
+    if platform == "pinterest":
+        return settings.zernio_pinterest_account_id
+    if platform == "instagram":
+        return settings.zernio_instagram_account_id
+    return None
 
 
 def _build_social_publisher(
@@ -454,6 +468,153 @@ def _print_report(
                 f"- #{post.id} nmID={post.product_nm_id} "
                 f"status={post.status.value} external_id={post.external_id or '-'}"
             )
+
+
+def _sync_zernio_metrics(
+    *,
+    store: Store,
+    settings: Settings,
+    platform: str,
+    from_date: str | None,
+    to_date: str | None,
+    limit: int | None,
+) -> dict[str, int]:
+    _validate_metrics_platform(platform)
+    if not settings.zernio_api_key:
+        raise typer.BadParameter("ZERNIO_API_KEY is required for sync-metrics.")
+
+    platforms = sorted(ZERNIO_METRICS_PLATFORMS) if platform == "all" else [platform]
+    posts = [
+        post
+        for post in store.list_posts(status=PostStatus.PUBLISHED)
+        if post.platform in platforms and post.external_id
+    ]
+    posts.sort(key=lambda post: (post.published_at or post.created_at, post.id), reverse=True)
+    if limit is not None:
+        posts = posts[:limit]
+
+    client = ZernioPublisher(settings.zernio_api_key)
+    synced = 0
+    pending = 0
+    failed = 0
+    skipped = 0
+
+    for post in posts:
+        account_id = _zernio_account_id_for_metrics(settings, post.platform)
+        if not account_id:
+            skipped += 1
+            typer.echo(f"Skipped post #{post.id}: missing Zernio account ID for {post.platform}.")
+            continue
+        try:
+            body = client.get_post_analytics(
+                post_id=post.external_id,
+                platform=post.platform,
+                account_id=account_id,
+                from_date=from_date,
+                to_date=to_date,
+            )
+            if body.get("_http_status") == 202:
+                pending += 1
+                typer.echo(f"Pending metrics for post #{post.id} external_id={post.external_id}.")
+                continue
+            metrics = _social_metrics_from_zernio(post, body)
+            saved = store.save_post_metrics(metrics)
+            synced += 1
+            typer.echo(
+                f"Synced {post.platform} post #{post.id} nmID={post.product_nm_id}: "
+                f"impressions={saved.impressions or 0} reach={saved.reach or 0} "
+                f"clicks={saved.clicks or 0} likes={saved.likes or 0} saves={saved.saves or 0}."
+            )
+        except Exception as exc:  # pragma: no cover - defensive CLI boundary
+            failed += 1
+            typer.echo(f"Failed metrics for post #{post.id} external_id={post.external_id}: {exc}")
+
+    return {"processed": len(posts), "synced": synced, "pending": pending, "failed": failed, "skipped": skipped}
+
+
+def _social_metrics_from_zernio(post: PlannedPost, body: dict[str, object]) -> SocialPostMetrics:
+    return SocialPostMetrics(
+        post_id=post.id,
+        product_nm_id=post.product_nm_id,
+        platform=post.platform,
+        external_id=post.external_id,
+        source="zernio",
+        captured_at=datetime.now(UTC),
+        impressions=_metric_value(body, "impressions", "impressionCount", "impressionsCount"),
+        reach=_metric_value(body, "reach", "reachCount"),
+        clicks=_metric_value(body, "clicks", "clickCount", "linkClicks", "outboundClicks"),
+        likes=_metric_value(body, "likes", "likeCount", "likesCount"),
+        comments=_metric_value(body, "comments", "commentCount", "commentsCount"),
+        saves=_metric_value(body, "saves", "saveCount", "savesCount"),
+        shares=_metric_value(body, "shares", "shareCount", "sharesCount"),
+        views=_metric_value(body, "views", "viewCount", "videoViews", "videoViewCount"),
+        engagement=_metric_value(body, "engagement", "engagements", "engagementCount"),
+        raw=body,
+    )
+
+
+def _metric_value(body: object, *keys: str) -> int | None:
+    lowered_keys = {key.lower() for key in keys}
+    if isinstance(body, dict):
+        for key, value in body.items():
+            if str(key).lower() in lowered_keys:
+                parsed = _optional_metric_int(value)
+                if parsed is not None:
+                    return parsed
+        for value in body.values():
+            parsed = _metric_value(value, *keys)
+            if parsed is not None:
+                return parsed
+    elif isinstance(body, list):
+        for item in body:
+            parsed = _metric_value(item, *keys)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _optional_metric_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return max(value, 0)
+    if isinstance(value, float):
+        return max(int(value), 0)
+    if isinstance(value, str):
+        cleaned = value.strip().replace(" ", "")
+        if cleaned.isdigit():
+            return int(cleaned)
+    return None
+
+
+def _print_metrics_report(store: Store, *, platform: str, limit: int | None) -> None:
+    _validate_metrics_platform(platform)
+    resolved_platform = None if platform == "all" else platform
+    summary = store.metrics_summary(platform=resolved_platform)
+    metrics = store.latest_post_metrics(platform=resolved_platform, limit=limit)
+
+    typer.echo("Social metrics report")
+    typer.echo(f"Platform: {platform}")
+    typer.echo(f"Posts with metrics: {summary['posts_with_metrics']}")
+    typer.echo(
+        "Totals: "
+        f"impressions={summary['impressions']} reach={summary['reach']} clicks={summary['clicks']} "
+        f"likes={summary['likes']} comments={summary['comments']} saves={summary['saves']} "
+        f"shares={summary['shares']} views={summary['views']} engagement={summary['engagement']}"
+    )
+    if not metrics:
+        typer.echo("No metrics saved yet. Run sync-metrics first.")
+        return
+
+    typer.echo("\nLatest per post:")
+    for item in metrics:
+        typer.echo(
+            f"- {item.platform} post #{item.post_id} nmID={item.product_nm_id} "
+            f"external_id={item.external_id or '-'} captured_at={item.captured_at.isoformat()} "
+            f"impressions={item.impressions or 0} reach={item.reach or 0} clicks={item.clicks or 0} "
+            f"likes={item.likes or 0} comments={item.comments or 0} saves={item.saves or 0} "
+            f"shares={item.shares or 0} views={item.views or 0}"
+        )
 
 
 def _print_plan_result(result: dict[str, int]) -> None:
@@ -1991,6 +2152,49 @@ def status(
     store = Store(db_path or settings.db_path)
     store.init_db()
     _print_report(store, platform=None)
+
+
+@app.command()
+def sync_metrics(
+    platform: str = typer.Option("all", help="Platform filter: all, pinterest, or instagram."),
+    from_date: str | None = typer.Option(None, help="Analytics start date YYYY-MM-DD. Defaults to Zernio API default."),
+    to_date: str | None = typer.Option(None, help="Analytics end date YYYY-MM-DD. Defaults to today in Zernio."),
+    limit: int | None = typer.Option(None, help="Maximum number of published posts to sync."),
+    db_path: Path | None = typer.Option(None, help="SQLite database path."),
+) -> None:
+    """Fetch social metrics from Zernio for published Pinterest/Instagram posts."""
+    if limit is not None and limit < 1:
+        raise typer.BadParameter("limit must be greater than zero.")
+    settings = load_settings()
+    store = Store(db_path or settings.db_path)
+    store.init_db()
+    result = _sync_zernio_metrics(
+        store=store,
+        settings=settings,
+        platform=platform,
+        from_date=from_date,
+        to_date=to_date,
+        limit=limit,
+    )
+    typer.echo(
+        f"Metrics sync complete: processed={result['processed']} synced={result['synced']} "
+        f"pending={result['pending']} failed={result['failed']} skipped={result['skipped']}."
+    )
+
+
+@app.command()
+def metrics_report(
+    platform: str = typer.Option("all", help="Platform filter: all, pinterest, or instagram."),
+    limit: int | None = typer.Option(20, help="Maximum number of latest post metric rows to show."),
+    db_path: Path | None = typer.Option(None, help="SQLite database path."),
+) -> None:
+    """Print latest saved social metrics."""
+    if limit is not None and limit < 1:
+        raise typer.BadParameter("limit must be greater than zero.")
+    settings = load_settings()
+    store = Store(db_path or settings.db_path)
+    store.init_db()
+    _print_metrics_report(store, platform=platform, limit=limit)
 
 
 @app.command()

@@ -334,3 +334,45 @@ def test_zernio_publisher_lists_accounts() -> None:
     assert result["accounts"][0]["_id"] == "acc-1"
     assert requests[0].url.path == "/api/v1/accounts"
     assert requests[0].url.params["platform"] == "pinterest"
+
+
+def test_zernio_publisher_gets_post_analytics() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"analytics": {"impressions": 120, "reach": 90, "clicks": 7}},
+        )
+
+    client = httpx.Client(
+        base_url=ZernioPublisher.base_url,
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = ZernioPublisher("token", client=client).get_post_analytics(
+        post_id="zp-123",
+        platform="pinterest",
+        account_id="acc-1",
+        from_date="2026-06-01",
+        to_date="2026-06-09",
+    )
+
+    assert result["analytics"]["clicks"] == 7
+    assert requests[0].url.path == "/api/v1/analytics"
+    assert requests[0].url.params["postId"] == "zp-123"
+    assert requests[0].url.params["platform"] == "pinterest"
+    assert requests[0].url.params["accountId"] == "acc-1"
+
+
+def test_zernio_publisher_returns_pending_analytics() -> None:
+    client = httpx.Client(
+        base_url=ZernioPublisher.base_url,
+        transport=httpx.MockTransport(lambda request: httpx.Response(202, json={"status": "syncing"})),
+    )
+
+    result = ZernioPublisher("token", client=client).get_post_analytics(post_id="zp-123")
+
+    assert result["_http_status"] == 202
+    assert result["status"] == "syncing"

@@ -680,6 +680,23 @@ python -m wb_autoposter.cli zernio-check --platform pinterest
 python -m wb_autoposter.cli publish --platform pinterest --zernio --no-dry-run
 ```
 
+**Соцметрики через Zernio**
+
+После реальной публикации Pinterest/Instagram пост получает `external_id`. По этому ID можно подтягивать аналитику Zernio и сохранять ее в локальную SQLite-базу:
+
+```bash
+python -m wb_autoposter.cli sync-metrics --platform all
+python -m wb_autoposter.cli sync-metrics --platform pinterest
+python -m wb_autoposter.cli sync-metrics --platform instagram
+python -m wb_autoposter.cli metrics-report --platform all
+```
+
+`sync-metrics` читает опубликованные посты со статусом `published`, берет их `external_id`, вызывает `GET /api/v1/analytics` в Zernio и сохраняет снимок в таблицу `post_metrics`. Сохраняются нормализованные поля `impressions`, `reach`, `clicks`, `likes`, `comments`, `saves`, `shares`, `views`, `engagement`, плюс полный raw JSON ответа.
+
+Если Zernio возвращает `202`, это значит, что синхронизация аналитики еще не готова; команда помечает такой пост как `pending` и не ломает общий прогон. Повторный запуск позже сохранит новый снимок метрик.
+
+Для Instagram клики на WB из caption честно не считаются как кликабельная ссылка, поэтому основной смысл метрик там - охват и вовлеченность: `reach`, `views`, `likes`, `comments`, `saves`. Для Pinterest можно смотреть еще и `clicks`, потому что ссылка на товар передается как destination link пина.
+
 Реальный Zernio-publish для Pinterest добавлен отдельным publisher и заблокирован safety-флагом. Он запускается только при `ZERNIO_ENABLE_REAL_PUBLISH=1`, заполненных `ZERNIO_API_KEY`, `ZERNIO_PINTEREST_ACCOUNT_ID` и `ZERNIO_PINTEREST_BOARD_ID`. Instagram оставлен следующим шагом после проверки Pinterest.
 
 **VK API**

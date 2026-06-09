@@ -87,6 +87,38 @@ class ZernioPublisher:
         response.raise_for_status()
         return response.json()
 
+    def get_post_analytics(
+        self,
+        *,
+        post_id: str | None = None,
+        platform: str | None = None,
+        account_id: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        source: str = "all",
+    ) -> dict[str, Any]:
+        params: dict[str, str] = {"source": source}
+        if post_id:
+            params["postId"] = post_id
+        if platform:
+            params["platform"] = platform
+        if account_id:
+            params["accountId"] = account_id
+        if from_date:
+            params["fromDate"] = from_date
+        if to_date:
+            params["toDate"] = to_date
+
+        response = self.client.get("/analytics", headers=self._headers(), params=params)
+        if response.status_code == 202:
+            body = _json_or_empty(response)
+            body["_http_status"] = 202
+            return body
+        response.raise_for_status()
+        body = _json_or_empty(response)
+        body["_http_status"] = response.status_code
+        return body
+
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
@@ -400,6 +432,14 @@ def _short_response_text(response: httpx.Response, *, limit: int = 600) -> str:
     if not text:
         return "<empty response>"
     return text[:limit]
+
+
+def _json_or_empty(response: httpx.Response) -> dict[str, Any]:
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {"data": body}
 
 
 def _is_instagram_supported_image_url(image_url: str) -> bool:
