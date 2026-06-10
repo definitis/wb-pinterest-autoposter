@@ -171,6 +171,8 @@ python -m wb_autoposter.cli wb-browser-baseline --seller-url "https://www.wildbe
 
 ## Основной Запуск
 
+Для WB scan основной путь - Selenium + undetected Chrome. Используйте один и тот же `--user-data-dir` для baseline, dry-run и real publish. Первый запуск нового WB-профиля лучше сделать видимым, без `--headless --no-manual-ready`, чтобы пройти cookies/регион/проверку WB; после этого тот же профиль можно использовать headless.
+
 ### Безопасный dry-run
 
 Dry-run проходит весь пайплайн, но не публикует реальные посты:
