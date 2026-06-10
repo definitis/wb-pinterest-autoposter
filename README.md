@@ -95,9 +95,9 @@ WB_AUTOPOSTER_DB_PATH=out/app.sqlite3
 WB_AUTOPOSTER_OUT_DIR=out
 
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
-GEMINI_REQUEST_INTERVAL_SECONDS=6
-GEMINI_429_COOLDOWN_SECONDS=60
+GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_REQUEST_INTERVAL_SECONDS=15
+GEMINI_429_COOLDOWN_SECONDS=180
 CONTENT_RULES_PATH=config/content_rules.example.json
 
 ZERNIO_API_KEY=
@@ -243,6 +243,23 @@ Gemini используется только как улучшение текс�
 - `GEMINI_REQUEST_INTERVAL_SECONDS` задает паузу между запросами по разным товарам;
 - `GEMINI_429_COOLDOWN_SECONDS` задает cooldown после rate limit.
 
+Для пилота лучше начинать с:
+
+```env
+GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_REQUEST_INTERVAL_SECONDS=15
+GEMINI_429_COOLDOWN_SECONDS=180
+```
+
+Почему так:
+
+- тексты короткие, поэтому Flash-Lite обычно достаточно;
+- один товар генерируется одним запросом сразу для трех площадок;
+- более длинная пауза снижает риск `429 Too Many Requests`;
+- при `503 Service Unavailable` или `429 Too Many Requests` проект использует fallback и не ломает публикацию.
+
+Если нужно показать максимально красивый demo-прогон с LLM-текстом, лучше запускать 1-2 новых товара за раз. Публикационные лимиты (`--vk-limit`, `--pinterest-limit`, `--instagram-limit`) ограничивают публикацию, но генерация текста происходит на этапе планирования для всех найденных новых товаров.
+
 Правила текста можно менять без правки кода через:
 
 ```env
@@ -323,7 +340,7 @@ To-be с проектом:
 Прямые расходы MVP:
 
 - Zernio: зависит от тарифа и числа подключенных аккаунтов; для пилота можно использовать бесплатный/минимальный тариф, если он покрывает нужные аккаунты и лимиты.
-- Gemini: для небольшого объема запросов можно начать с бесплатного лимита; при росте объема нужен платный лимит или более жесткий throttling.
+- Gemini: для небольшого объема запросов можно начать с бесплатного лимита, но для стабильного пилота лучше закладывать платный API tier. По официальной странице Google Gemini API pricing на июнь 2026: `gemini-2.5-flash` стоит $0.30 за 1M input tokens и $2.50 за 1M output tokens, а `gemini-2.5-flash-lite` - $0.10 за 1M input tokens и $0.40 за 1M output tokens. Актуальные цены нужно проверять перед запуском: https://ai.google.dev/gemini-api/docs/pricing
 - Сервер/ПК: 0 ₽, если запускать локально на рабочем Windows-ПК; ориентир 1000-2500 ₽/мес, если нужен VPS/Windows-сервер под регулярный запуск.
 - Домен/redirect/short links: сейчас не нужны, потому что соцметрики считаются через Zernio, а WB-ссылки остаются прямыми.
 - Поддержка: закладывать время на мониторинг, обновление селекторов WB/VK browser automation и корректировку текстовых правил.
@@ -397,11 +414,53 @@ python -m wb_autoposter.cli vk-browser-login --start-url "https://vk.com/club239
 
 ### Gemini `429 Too Many Requests`
 
-Это rate limit. Проект включит cooldown и продолжит через fallback. Для более мягкого режима увеличить:
+Это rate limit: бесплатная квота или лимит частоты запросов. Проект включит cooldown и продолжит через fallback. Для более мягкого режима использовать Flash-Lite и увеличить паузы:
 
 ```env
-GEMINI_REQUEST_INTERVAL_SECONDS=10
-GEMINI_429_COOLDOWN_SECONDS=120
+GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_REQUEST_INTERVAL_SECONDS=15
+GEMINI_429_COOLDOWN_SECONDS=180
+```
+
+Для стабильного production-пилота лучше подключить billing в Google AI Studio / Google Cloud. Бесплатный tier подходит для теста, но он может давать `429` при серии новых товаров.
+
+### Gemini `503 Service Unavailable`
+
+Это временная недоступность Gemini API или конкретной модели. Проект не останавливает цикл и использует fallback. Обычно достаточно повторить запуск позже; если проблема повторяется, можно временно сменить модель через `GEMINI_MODEL` или оставить fallback до восстановления API.
+
+### `Could not find the WB seller 'All products' section`
+
+Скрипт открыл WB, но не увидел блок со всеми товарами продавца. Частые причины:
+
+- свежий browser profile и WB показывает cookies/регион/проверку;
+- headless-режим загрузил не тот вид страницы;
+- страница продавца изменилась или долго грузится.
+
+Что делать:
+
+1. Первый запуск сделать видимым, без `--headless --no-manual-ready`.
+2. В открывшемся браузере пройти cookies/регион/проверку и убедиться, что товары видны.
+3. Вернуться в терминал и нажать Enter.
+4. После сохранения профиля пробовать headless-запуск снова.
+
+Если Selenium/undetected Chrome нестабилен, использовать Playwright:
+
+```powershell
+python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1" --scan-limit 100 --user-data-dir out\wb_chrome_profile_baseline --browser-engine playwright --vk --pinterest --instagram --pinterest-zernio --dry-run --vk-limit 1 --pinterest-limit 1 --instagram-limit 1
+```
+
+### `chrome not reachable` или `cannot connect to chrome`
+
+Обычно остался старый Chrome/ChromeDriver с тем же `--user-data-dir`. Один Chrome-профиль нельзя использовать несколькими процессами одновременно.
+
+Что делать:
+
+- закрыть окна Chrome, открытые этим проектом;
+- в Диспетчере задач завершить headless `chrome.exe`/`chromedriver.exe`, если они держат `out\wb_chrome_profile_baseline`;
+- или запустить с новым профилем:
+
+```powershell
+python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1" --scan-limit 100 --user-data-dir out\wb_chrome_profile_demo --browser-engine playwright --vk --pinterest --instagram --pinterest-zernio --dry-run --vk-limit 1 --pinterest-limit 1 --instagram-limit 1
 ```
 
 ### Новых товаров нет
@@ -432,13 +491,15 @@ python -m pytest
 
 ## Roadmap
 
-1. Стабилизация пилота: прогнать 3-7 дней регулярного запуска, проверить антидубли, Zernio-статусы, VK browser session и Gemini fallback.
+1. Стабилизация пилота: прогнать 3-7 дней регулярного запуска, проверить антидубли, Zernio-статусы, VK browser session, WB browser profile и Gemini fallback.
 2. Контент: посмотреть 20-30 реальных публикаций, ужесточить `config/content_rules.example.json`, убрать слабые CTA и лишние хэштеги.
-3. Метрики: добавить регулярный `sync-metrics`, недельный CSV/JSON отчет и сравнение постов по reach/clicks/saves.
-4. Операторский web-admin: список товаров, очередь публикаций, ошибки, повтор публикации, ручной skip, просмотр текстов и метрик.
-5. Надежный scheduler: вынести запуск на Windows VPS/сервер или отдельный рабочий ПК, добавить логи и уведомления об ошибках.
-6. Источник WB: при появлении доступов подключить Seller API или импорт CSV/XLSX из кабинета WB как более стабильный источник новинок.
-7. VK production path: если VK станет важным каналом, заменить browser automation на официальный OAuth/API-путь с корректной загрузкой фото.
-8. Pinterest/Instagram развитие: протестировать разные доски/форматы, reels/stories/carousel через Zernio, отдельные лимиты и тексты под канал.
-9. Атрибуция продаж: если бизнесу нужны именно заказы, договориться о доступе к WB-аналитике/отчетам и связать периоды публикаций с продажами.
-10. Развитие под компанию: сезонные кампании, разные правила для категорий одежды, расписание по площадкам, стоп-лист товаров и отчетность для команды бренда.
+3. LLM production path: подключить платный Gemini API tier или протестировать альтернативы для коротких e-commerce текстов, сравнить процент успешных ответов, стоимость, качество русского текста и частоту rate limit.
+4. Генерация по очереди: перенести LLM-генерацию ближе к моменту публикации или добавить отдельный лимит `content-generation-limit`, чтобы demo/пилот не отправлял запросы для всех найденных товаров сразу.
+5. Метрики: добавить регулярный `sync-metrics`, недельный CSV/JSON отчет и сравнение постов по reach/clicks/saves.
+6. Операторский web-admin: список товаров, очередь публикаций, ошибки, повтор публикации, ручной skip, просмотр текстов и метрик.
+7. Надежный scheduler: вынести запуск на Windows VPS/сервер или отдельный рабочий ПК, добавить логи и уведомления об ошибках.
+8. Источник WB: при появлении доступов подключить Seller API или импорт CSV/XLSX из кабинета WB как более стабильный источник новинок.
+9. VK production path: если VK станет важным каналом, заменить browser automation на официальный OAuth/API-путь с корректной загрузкой фото.
+10. Pinterest/Instagram развитие: протестировать разные доски/форматы, reels/stories/carousel через Zernio, отдельные лимиты и тексты под канал.
+11. Атрибуция продаж: если бизнесу нужны именно заказы, договориться о доступе к WB-аналитике/отчетам и связать периоды публикаций с продажами.
+12. Развитие под компанию: сезонные кампании, разные правила для категорий одежды, расписание по площадкам, стоп-лист товаров и отчетность для команды бренда.

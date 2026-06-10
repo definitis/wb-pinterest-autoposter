@@ -139,7 +139,7 @@ class TemplateContentGenerator:
         self,
         *,
         gemini_api_key: str | None = None,
-        gemini_model: str = "gemini-2.5-flash",
+        gemini_model: str = "gemini-2.5-flash-lite",
         gemini_request_interval_seconds: float = 0.0,
         gemini_429_cooldown_seconds: float = 0.0,
         client: httpx.Client | None = None,

@@ -141,14 +141,14 @@ def load_settings() -> Settings:
         zernio_instagram_account_id=os.getenv("ZERNIO_INSTAGRAM_ACCOUNT_ID") or None,
         zernio_instagram_content_type=os.getenv("ZERNIO_INSTAGRAM_CONTENT_TYPE", "feed").strip() or "feed",
         gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash",
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite").strip() or "gemini-2.5-flash-lite",
         gemini_request_interval_seconds=_parse_non_negative_float(
             os.getenv("GEMINI_REQUEST_INTERVAL_SECONDS"),
-            default=6.0,
+            default=15.0,
         ),
         gemini_429_cooldown_seconds=_parse_non_negative_float(
             os.getenv("GEMINI_429_COOLDOWN_SECONDS"),
-            default=60.0,
+            default=180.0,
         ),
         content_rules_path=Path(os.getenv("CONTENT_RULES_PATH")) if os.getenv("CONTENT_RULES_PATH") else None,
     )
