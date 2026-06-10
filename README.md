@@ -443,7 +443,7 @@ GEMINI_429_COOLDOWN_SECONDS=180
 3. Вернуться в терминал и нажать Enter.
 4. После сохранения профиля пробовать headless-запуск снова.
 
-Если Selenium/undetected Chrome нестабилен, использовать Playwright:
+Основной путь проекта для WB scan - Selenium + undetected Chrome, то есть запуск без `--browser-engine playwright`. Playwright оставлен как запасной вариант, если undetected Chrome не стартует на конкретной машине даже после закрытия старых процессов и свежего профиля:
 
 ```powershell
 python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1" --scan-limit 100 --user-data-dir out\wb_chrome_profile_baseline --browser-engine playwright --vk --pinterest --instagram --pinterest-zernio --dry-run --vk-limit 1 --pinterest-limit 1 --instagram-limit 1
@@ -457,10 +457,10 @@ python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberrie
 
 - закрыть окна Chrome, открытые этим проектом;
 - в Диспетчере задач завершить headless `chrome.exe`/`chromedriver.exe`, если они держат `out\wb_chrome_profile_baseline`;
-- или запустить с новым профилем:
+- или запустить с новым профилем, оставаясь на основном Selenium/undetected Chrome пути:
 
 ```powershell
-python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1" --scan-limit 100 --user-data-dir out\wb_chrome_profile_demo --browser-engine playwright --vk --pinterest --instagram --pinterest-zernio --dry-run --vk-limit 1 --pinterest-limit 1 --instagram-limit 1
+python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1" --scan-limit 100 --user-data-dir out\wb_chrome_profile_demo --vk --pinterest --instagram --pinterest-zernio --dry-run --vk-limit 1 --pinterest-limit 1 --instagram-limit 1
 ```
 
 ### Новых товаров нет

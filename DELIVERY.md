@@ -59,9 +59,22 @@ python -m wb_autoposter.cli wb-browser-baseline --seller-url "https://www.wildbe
 
 Для проекта заказчика заменить `--seller-url` на страницу нужного продавца WB.
 
+Важно по WB-браузеру:
+
+- основной путь проекта для WB scan - Selenium + undetected Chrome, то есть команды без `--browser-engine playwright`;
+- `--user-data-dir` должен быть одним и тем же для baseline, dry-run и real publish;
+- первый запуск на новом профиле лучше делать в видимом браузере, без `--headless --no-manual-ready`, чтобы пройти cookies/регион/проверку WB;
+- после успешного видимого запуска тот же профиль можно использовать в headless-режиме.
+
 ## 4. Проверка Реального Цикла
 
-Сначала выполнить dry-run на реальной странице WB:
+Сначала выполнить видимый dry-run на реальной странице WB. Когда браузер откроется, дождаться товаров, пройти возможные проверки WB и нажать Enter в терминале:
+
+```powershell
+python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1" --scan-limit 100 --user-data-dir out\wb_chrome_profile_baseline --vk --pinterest --instagram --pinterest-zernio --dry-run --vk-limit 1 --pinterest-limit 1 --instagram-limit 1
+```
+
+После успешного видимого dry-run можно повторить headless dry-run:
 
 ```powershell
 python -m wb_autoposter.cli wb-social-cycle --seller-url "https://www.wildberries.ru/seller/trendsetter?sort=newly&page=1" --scan-limit 100 --user-data-dir out\wb_chrome_profile_baseline --vk --pinterest --instagram --pinterest-zernio --dry-run --vk-limit 1 --pinterest-limit 1 --instagram-limit 1 --headless --no-manual-ready
